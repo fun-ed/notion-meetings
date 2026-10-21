@@ -8,7 +8,7 @@ import http from 'node:http';
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'meetings-'));
 process.env.OPENROUTER_API_KEY = ''; // never call the real API from tests
 const ai = await import('./ai.js');
-const { parseTranscription, transcriptText, extOf, toTaiwan, parseTerms, applyNumbered, parseActions, cleanMeta, parseQuery, searchMeetings, parseDirectory, resolver, usageOf, aggregateUsage, migrateLayout, reassignSpeakers, openaiUsage, isTransient, keyScope, viaEnv, apiKeyFor, RETRY, mergeTerms, flagForeignScript, cleanHints, cer, speakerAccuracy, bestAssignment, termHits, localDay, nowIso, searchMeetings: search2, server } = await import('./server.js');
+const { parseTranscription, transcriptText, extOf, toTaiwan, parseTerms, applyNumbered, parseActions, cleanMeta, parseQuery, searchMeetings, parseDirectory, resolver, usageOf, aggregateUsage, migrateLayout, reassignSpeakers, openaiUsage, isTransient, keyScope, viaEnv, apiKeyFor, llmKeyMissing, RETRY, mergeTerms, flagForeignScript, cleanHints, cer, speakerAccuracy, bestAssignment, termHits, localDay, nowIso, searchMeetings: search2, server } = await import('./server.js');
 
 test('parseTranscription maps verbose_json segments to speaker segments', () => {
   const r = parseTranscription({ language: 'zh', segments: [
@@ -419,6 +419,19 @@ test('start:litellm uses the key it was launched with', async () => {
   } finally { for (const k of ['OTHER_KEY', 'LLM_PROVIDER', 'OPENAI_API_KEY']) delete process.env[k]; }
 });
 
+test('startup warns when the default model has no LLM key', async () => {
+  const saved = { ...process.env };
+  try {
+    for (const k of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'LLM_PROVIDER', 'OPENAI_API_KEY']) delete process.env[k];
+    assert.equal(await llmKeyMissing(), true, 'plain npm run start');
+    process.env.ANTHROPIC_API_KEY = 'magpie';
+    assert.equal(await llmKeyMissing(), false, 'start:magpie');
+    delete process.env.ANTHROPIC_API_KEY;
+    Object.assign(process.env, { LLM_PROVIDER: 'openai', OPENAI_API_KEY: 'launch-key' });
+    assert.equal(await llmKeyMissing(), false, 'start:litellm');
+  } finally { process.env = saved; }
+});
+
 test('OpenAI-compatible endpoint: write-only key, model list, retry on 503 and empty replies', async () => {
   RETRY.delays = [10, 10];
   let calls = 0;
@@ -452,3 +465,12 @@ test('OpenAI-compatible endpoint: write-only key, model list, retry on 503 and e
   } finally { fake.close(); }
 });
 
+
+test('tidy view drops filler sounds but keeps sentence-final particles (D-023)', () => {
+  // tidy lives in the single-file UI; evaluate its one-line definition.
+  const tidy = eval(fs.readFileSync(new URL('./public/index.html', import.meta.url), 'utf8').match(/^const tidy = (.*);$/m)[1]);
+  for (const [input, want] of [['嗯。', ''], ['嗯嗯。', ''], ['哦， OK。', 'OK。'], ['從呃7月', '從7月'], ['啊，還是，嗯。', '還是。'],
+    ['有，有。欸，聽得到嗎？', '有，有。聽得到嗎？'], ['team 啊，所以', 'team 啊，所以'], ['對啊，好啊。', '對啊，好啊。'], ['等一下哦。', '等一下哦。']]) {
+    assert.equal(tidy(input), want, input);
+  }
+});

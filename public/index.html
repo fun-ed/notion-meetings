@@ -160,6 +160,7 @@
   .player button { font-size:13px; padding:1px 8px; }
   .player .rate.on { background:var(--fg); border-color:var(--fg); color:var(--bg); }
   .seg.hl { background:var(--hl); }
+  .seg.filler { display:none; }
   .seg time { color:var(--accent); cursor:pointer; font-variant-numeric:tabular-nums; }
   .seg b { font-weight:600; }
   .seg b.pick { cursor:pointer; } .seg b.pick:hover { text-decoration:underline dotted; }
@@ -214,6 +215,8 @@
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
 const fmt = t => `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+// Tidy view (D-023), display only: drops 呃 and stand-alone 嗯/欸/哦/喔/啊; 對啊、好啊 stay because the particle follows a word.
+const tidy = t => t.replace(/呃[，、。]?/g, '').replace(/(^|[，。？！、])(?:[嗯欸哦喔啊][，、。]?)+/g, '$1').replace(/^[，、。\s]+/, '').replace(/[，、]$/, '。').replace(/\s{2,}/g, ' ').trim();
 // Every date and time shows Taiwan time (GMT+8), whatever the browser's time zone.
 const TZ = 'Asia/Taipei';
 const day = iso => new Date(iso).toLocaleDateString('zh-TW', { timeZone: TZ, year: 'numeric', month: 'long', day: 'numeric' });
@@ -254,7 +257,7 @@ const usageLine = t => `${t.calls} 次 · 輸入 ${num(inTotal(t))}／輸出 ${n
   + (t.audioSeconds ? ` · 音訊 ${fmt(t.audioSeconds)}` : '') + (t.costUsd ? ` · 費用 ${usd(t.costUsd)}` : '');
 const prop = (icon, label, html) => `<div class="prop"><span>${icon} ${label}</span><div>${html}</div></div>`;
 let rate = +localStorage.getItem('rate') || 1, activeSeg = 0, pick = null; // pick: open speaker range picker {from, to}
-let meetings = [], current = null, pollTimer = null, tab = 'summary', showRaw = false, searchQ = '', searchTimer;
+let meetings = [], current = null, pollTimer = null, tab = 'summary', showRaw = false, tidyView = localStorage.getItem('tidy') !== '0', searchQ = '', searchTimer;
 let me = null, authInfo = {}, aiCfg = { models: [], agents: [] }, teamTerms = []; // teamTerms: enabled team glossary (learning loop P1)
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const rank = level => ['none', 'view', 'comment', 'edit', 'owner'].indexOf(level);
@@ -885,9 +888,10 @@ function render(m) {
       ${m.perm === 'owner' ? `<div class="learn-row">${m.benchmarkAt
         ? `📌 已凍結為 benchmark（${dt(m.benchmarkAt)}）<button class="ghost" onclick="setBenchmark(false)">取消凍結</button>`
         : '<button class="ghost" onclick="setBenchmark(true)" title="講者與文字校正完成後凍結，當作準確率的標準答案">📌 凍結為 benchmark</button>'}</div>` : ''}
+      <label class="muted"><input type="checkbox" data-keep ${tidyView ? 'checked' : ''} onchange="tidyView = this.checked; localStorage.setItem('tidy', tidyView ? '1' : '0'); render(current)"> 精簡顯示（隱藏呃、嗯、欸等語助詞，不改逐字稿）</label>
       ${m.segments.some(s => s.raw && s.raw !== s.text) ? `<label class="muted"><input type="checkbox" data-keep ${showRaw ? 'checked' : ''} onchange="showRaw = this.checked; render(current)"> 顯示原始辨識結果（未轉繁體、未校對）</label>` : ''}
-      ${m.segments.map((s, i) => `<div class="seg" id="seg-${i + 1}"><time onclick="seek(${i + 1})">${fmt(s.start)}</time>
-        <b style="color:${COLORS[s.speaker % COLORS.length]}" ${canEdit ? `class="pick" title="點一下改講者；Shift＋點另一段選範圍" onclick="pickSpeaker(${i}, event)"` : ''}>${esc(spk(m, s.speaker))}</b><span>${esc(showRaw ? s.raw ?? s.text : s.text).replaceAll('【?】', '<mark title="辨識不確定，請對照錄音">【?】</mark>')}</span></div>`).join('')}`,
+      ${m.segments.map((s, i) => { const text = showRaw ? s.raw ?? s.text : tidyView ? tidy(s.text) : s.text; return `<div class="seg${text ? '' : ' filler'}" id="seg-${i + 1}"><time onclick="seek(${i + 1})">${fmt(s.start)}</time>
+        <b style="color:${COLORS[s.speaker % COLORS.length]}" ${canEdit ? `class="pick" title="點一下改講者；Shift＋點另一段選範圍" onclick="pickSpeaker(${i}, event)"` : ''}>${esc(spk(m, s.speaker))}</b><span>${esc(text).replaceAll('【?】', '<mark title="辨識不確定，請對照錄音">【?】</mark>')}</span></div>`; }).join('')}`,
   };
   page(`<div class="crumb"><a href="#">會議紀錄</a> / ${esc(m.title)}</div>
     <div class="icon">🎙️</div>

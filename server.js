@@ -239,6 +239,12 @@ export async function apiKeyFor(model) {
   // Without a stored key: OPENAI_API_KEY for OpenAI-compatible models; the Anthropic SDK reads ANTHROPIC_API_KEY itself.
   return (await secrets.read()).keys[keyScope(model)]?.key || (model.provider === 'openai' ? process.env.OPENAI_API_KEY : undefined);
 }
+// Startup check: plain `npm run start` has no LLM key, and otherwise fails only at the first summary.
+export async function llmKeyMissing() {
+  const model = viaEnv(ai.pickAI(await aiStore.read()).model);
+  if (await apiKeyFor(model).catch(() => '')) return false;
+  return !(model.provider === 'anthropic' && (process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN));
+}
 
 const OPENAI_EFFORT = { low: 'low', medium: 'medium', high: 'high', xhigh: 'high', max: 'high' }; // xhigh/max: not confirmed to be forwarded
 const openaiBase = m => (m.baseURL || process.env.OPENAI_BASE_URL || '').replace(/\/+$/, '');
@@ -1137,5 +1143,8 @@ if (import.meta.main) {
   const moved = await migrateLayout();
   if (moved) console.log(`moved ${moved} meeting folder(s) into data/<YYYY-MM-DD>/`);
   // Bind to localhost only (D-008, D-013): accounts exist, but there is no TLS or hardening for network exposure.
-  server.listen(port, '127.0.0.1', () => console.log(`notion-meetings v${pkg.version}  http://localhost:${port}  (data: ${DATA})`));
+  server.listen(port, '127.0.0.1', async () => {
+    console.log(`notion-meetings v${pkg.version}  http://localhost:${port}  (data: ${DATA})`);
+    if (await llmKeyMissing().catch(() => false)) console.warn('警告：預設模型沒有 LLM 金鑰，摘要會失敗。請改用 npm run start:magpie 或 npm run start:litellm，或在管理後台為模型設定金鑰。');
+  });
 }
