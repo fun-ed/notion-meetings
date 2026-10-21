@@ -9,8 +9,9 @@ Notion AI Meeting Notes 本機復刻：錄音或上傳 → 分講者台灣繁體
 - `public/index.html`：全部前端，單檔，inline CSS/JS，無框架、無 build。
 - `server.test.js`：`node --test` 單元與 API 測試。
 - `eval/`：測試音檔產生、轉錄模型評測、端對端回歸閘門，見 `mem:eval/core`。
-- `CHANGELOG.md`：每版新增與驗證結果（目前 0.6.0）；版本號與 `repository` 在 `package.json`，`/api/auth/me` 回傳 `app {version, repo}` 給側欄左下角。
-- `scripts/build.sh`（Bun 打包）、`scripts/smoke-binary.sh`（執行檔發版檢查：版本、內嵌介面、e2e）。
+- `CHANGELOG.md`：每版新增與驗證結果（目前 0.6.1）；版本號與 `repository` 在 `package.json`，`/api/auth/me` 回傳 `app {version, repo}` 給側欄左下角。
+- `scripts/build.sh`（Bun 打包）、`scripts/smoke-binary.sh`（執行檔發版檢查：版本、內嵌介面、e2e）、`scripts/start-litellm.sh`（`npm run start:litellm`）。
+- `.github/workflows/ci.yml`：只能手動觸發（使用者決定，`gh workflow run ci.yml`），跑 `npm test`、Bun 1.4.3 建置 5 平台、`sha256sum -c`、啟動 Linux x64 執行檔檢查版本與內嵌介面；不含任何憑證，真 API 回歸留在本機。
 - `README.md`（英文）＋`README.zh-TW.md`（繁中），精簡版，只放 3 張截圖；兩份一起改。
 - `docs/decisions.md`：決策 D-001..D-022，唯一權威來源；`docs/architecture.md`：欄位、路由、設定；`docs/plans/`：計畫，總覽是 `2026-10-21-next-steps.md`（P0／P1／P2），細節在 `learning-loop`、`llm-endpoints`、`reliability`、`roadmap`；`docs/research/`：評測，所有設定的分數在 `2026-10-21-benchmark-standards.md` 的準確度總表。
 - Git 歷史在 2026-10-21 壓成單一 commit（`e66e5eb notion-meetings v0.5.0`），只有 `v0.5.0` tag 與 Release；之前的 commit 編號都失效。

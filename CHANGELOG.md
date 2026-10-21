@@ -22,6 +22,9 @@
 
 - `npm test` 21 項全過。新增：重疊與重複片段的計分、`start:litellm` 的金鑰順序、空回應的重試（先 503、再空內容、第三次成功）。測試的重試間隔縮短，整體從約 2 秒變成 0.7 秒。
 - 執行檔：5 個平台用官方 Bun 1.4.3 建置；`scripts/smoke-binary.sh` 測 macOS arm64，三行 PASS（乾淨 45/45、嚴苛 42/45、講者 9/9）。其他 4 個平台沒有實際執行；CI 的 Linux x64 啟動檢查要手動觸發後才會跑。
+- 發版後補測：
+  - `npm run start:litellm` 接公司 LiteLLM，先在後台故意存一把錯的舊 key，Opus 的連線測試仍用啟動時的正確 key 回 OK；`eval/e2e.py` 乾淨 45/45、嚴苛 42/45、講者 9/9，兩項 PASS。
+  - 手動觸發 CI（`gh workflow run ci.yml`）：單元測試、5 個平台建置、`SHA256SUMS` 核對、Linux x64 執行檔啟動全部成功。
 
 ## 0.6.0（2026-10-21）
 
