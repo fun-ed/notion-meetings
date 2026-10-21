@@ -1,13 +1,13 @@
 # 後端處理流程（server.js）
 
-- 轉錄共用 `transcribeClean(m, log)`：phraseList＝`mergeTerms(會議術語, 團隊術語)`（上限 500）→ OpenCC → `correctTerms` → `flagForeignScript`。摘要時 `summarize()` 與 `suggestSpeakers()` 並行，建議失敗不影響會議。Benchmark：`runBench()` 用同一份流程重跑凍結會議，`benchMetrics()`＝講者正確率（一對一配對、時間加權、每 15 分鐘）、CER、術語命中、【?】數。
+- 轉錄共用 `transcribeClean(m, log)`：phraseList＝`mergeTerms(會議術語, 團隊術語)`（上限 500）→ OpenCC → `correctTerms` → `flagForeignScript`。摘要時 `summarize()` 與 `suggestSpeakers()` 並行，建議失敗不影響會議。Benchmark：`runBench()` 用同一份流程重跑凍結會議並記錄 `fingerprint`（轉錄模型、校對模型與路徑、團隊術語雜湊）；`benchMetrics()`＝講者正確率（`speakerAccuracy()`：匈牙利演算法 `bestAssignment()` 一對一配對，只計實際重疊而且配對正確的時間，列出 `missed`，跨 15 分鐘邊界切開；0.6.0 前的算法會高估）、CER、術語命中、【?】數。
 - 狀態：`transcribing` → `correcting`（僅有術語時）→ `summarizing` → `done` | `error`。前端每 2 秒輪詢；`BUSY` 清單在前後端都要同步（server 的 409 檢查、index.html 的 `BUSY`）。
 - `transcribe(m)`：ffmpeg 轉單聲道 16 kHz 48 kbps `transcode.mp3`（用完刪）→ OpenRouter `/api/v1/audio/transcriptions`，model `microsoft/mai-transcribe-2`，JSON base64 `input_audio`，`response_format: verbose_json`，`provider.options.azure.diarization.enabled`，有術語才帶 `azure.phraseList.phrases`（空陣列可能報錯）。`language` 取 `m.lang` 的 `-` 前段；`auto` 不送。
 - MAI 即使 `language: zh` / `zh-TW` 仍輸出簡體 → `toTaiwan`（opencc-js `cn`→`twp`）。只在 `lang === 'zh-TW'` 或 `auto` 且偵測 `zh*` 時轉；`zh-CN` 不轉。
 - `correctTerms()`：送 `[n] text` 行給 Claude（`CORRECT_SYSTEM`），`applyNumbered()` 回填；缺行、越界、空字串保留原文。講者與時間戳不經過 LLM。
-- `claude(system, content, {model, effort})`：model 是 `ai.js` 的設定檔（無參數時用預設模型，校對用這個）；先 `checkContext()`（估 tokens＋maxOutput > contextWindow 就報錯，不截斷）；每個模型可有 baseURL／apiKeyEnv，否則用 `ANTHROPIC_BASE_URL`/`ANTHROPIC_API_KEY`；只有 opus-5-5／sonnet-5-5／fable-5-1 送 `fallbacks: 'default'`；`stop_reason === 'refusal'` 丟錯。
+- `llm(system, content, {model, effort, log, kind})`（0.5.0 起取代 `claude()`）：沒給 model 時用預設模型；先 `checkContext()`（估 tokens＋maxOutput > contextWindow 就報錯，不截斷）；`viaEnv()` 在 `LLM_PROVIDER=openai` 時把沒有自己 Endpoint 的模型改走 `OPENAI_BASE_URL` 並去掉 `codex/` 這類 magpie 前綴；依 provider 分派：`openai` 用 fetch 呼叫 `/chat/completions`（`reasoning_effort`，xhigh/max→high；拒答、content_filter、length 轉成錯誤；`x-litellm-response-cost` 記成 `costUsd`），`anthropic` 用 Anthropic SDK（只有 opus-5-5／sonnet-5-5／fable-5-1 送 `fallbacks: 'default'`）。`apiKeyFor()`：模型的 apiKeyEnv → `secrets.json` 依 Endpoint 的 key → `OPENAI_API_KEY`。暫時性錯誤（`isTransient()`：408/409/429/5xx/529、串流截斷）重試 2 次（2 秒、8 秒），每次失敗都記進 log。校對用 `pickFor(cfg, 'correct')`、講者建議用 `pickFor(cfg, 'speakers')`、摘要用 Agent 的 `pickAI`。
 - 摘要：`pickAI(cfg, m.agentId)` → 停用的 Agent 視同沒有、Agent 指定的模型不可用時退回預設模型、只用 provider=anthropic；系統提示＝`SUMMARY_SYSTEM`＋模型 systemAddition＋Agent 提示＋skills（SKILL.md 路徑或 URL，50KB 上限）；寫入 `summaryBy`。
-- 用量：`claude(..., {log, kind})`、`transcribe(m, log)` 把紀錄推進 `log`，`processMeeting` 的 finally 寫入 `meeting.usage`（失敗也存）。顯示總輸入要加快取讀寫（magpie 自動快取，`input_tokens` 只有個位數）。
+- 用量：`llm(..., {log, kind})`、`transcribe(m, log)` 把紀錄推進 `log`，`processMeeting` 的 finally 寫入 `meeting.usage`（失敗也存）。顯示總輸入要加快取讀寫（magpie 自動快取，`input_tokens` 只有個位數）。
 - 資料夾：`data/<本機上傳日>/<id>/`，一律經 `dir(id)`（快取＋掃描日期資料夾）與 `meetingIds()`，不要自己拼 `DATA/id`；啟動時 `migrateLayout()` 搬舊版。
 - magpie 會默默丟掉 `mcp_servers`（2026-10-21 實測），remote MCP 尚未支援。
 - `openrouterKey()`：`OPENROUTER_API_KEY` 定義（含空字串）就用它，否則每次讀 `~/.config/openrouter/key`；空字串＝停用，測試靠這點避免呼叫真 API。

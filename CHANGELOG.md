@@ -27,6 +27,7 @@
 - `npm run start:litellm` 不改任何設定跑 `eval/e2e.py`：乾淨 45/45、嚴苛 42/45、講者 9/9；每場都記到實際費用。
 - 轉錄模型（`gpt-4o-transcribe-diarize`、`gpt-4o-transcribe`、`whisper-1`）都不達標，轉錄維持 OpenRouter。
 - 啟動腳本確認不會把 key 印出。
+- 執行檔：5 個平台用官方 Bun 1.4.3 建置；`scripts/smoke-binary.sh` 測 macOS arm64，三行 PASS（乾淨 45/45、嚴苛 42/45、講者 9/9）。其他 4 個平台沒有實際執行。
 - benchmark：新增測試涵蓋「1 秒覆蓋 10 秒發言＝10%」「跨視窗拆開」「最佳配對優於貪婪配對（61.1% 對 38.9%）」；每次執行記錄設定指紋，後台顯示。
 - [benchmark 標準](docs/research/2026-10-21-benchmark-standards.md) 新增「各設定的準確度總表」。
 - 文件同步：架構文件更新講者計分與設定指紋；`meetings-dev`、`stt-research` skill 補上新的計分規則、準確度總表與 LiteLLM 轉錄的評測方式；`CLAUDE.md` 與 README 指向計畫總覽與準確度總表。
