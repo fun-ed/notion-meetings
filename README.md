@@ -140,7 +140,7 @@ The pipeline regression test (`eval/e2e.py`) and the binary release check (`scri
 |---|---|
 | [docs/decisions.md](docs/decisions.md) | Decisions and reasons. Read before changing code |
 | [docs/architecture.md](docs/architecture.md) | Pipeline, data fields, API |
-| [docs/plans/](docs/plans/) | Plans, named `YYYY-MM-DD-<topic>.md` |
-| [docs/research/](docs/research/) | Transcription model evaluations |
+| [docs/plans/](docs/plans/) | Plans, named `YYYY-MM-DD-<topic>.md`; start with [next steps](docs/plans/2026-10-21-next-steps.md) |
+| [docs/research/](docs/research/) | Evaluations; the accuracy of every tested setup is summarized in [benchmark standards](docs/research/2026-10-21-benchmark-standards.md) |
 | `.claude/skills/meetings-dev` | Development, testing, build and release |
 | `.claude/skills/stt-research` | Evaluating new transcription models |

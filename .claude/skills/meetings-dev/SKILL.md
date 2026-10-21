@@ -35,7 +35,9 @@ description: Develop, fix, or maintain the notion-meetings app (server.js routes
 - 帳號、名錄、模型設定都在 `data/`（不進 git）；真實名單與錄音不能出現在 repo 或截圖裡。
 - 摘要一律保留必備段落與 `- [ ] 事項 — 負責人 [n]` 格式，Agent 提示只能增加段落，否則 Action Items 解析不到。
 - 學習迴圈（D-020）：只學使用者確認過的內容。講者建議只是建議，程式不能自動改名；候選名字只能來自參與者、名錄人員與 Y leader。轉錄流程一律走 `transcribeClean()`，正式處理與 benchmark 共用同一份程式；`data/learned.json` 只能經 `learned.mutate()` 修改。
-- 改到轉錄、術語、校對或講者建議時，除了 `eval/e2e.py`，若有凍結的 benchmark 會議，也要在管理後台執行一次 benchmark，分數不能下降。
+- 改到轉錄、術語、校對或講者建議時，除了 `eval/e2e.py`，若有凍結的 benchmark 會議，也要在管理後台執行一次 benchmark，分數不能下降。比較分數前，先看每次執行的設定指紋（轉錄模型、校對模型、術語雜湊）是否相同。
+- Benchmark 的講者正確率只計實際重疊而且配對正確的時間，配對用匈牙利演算法（`bestAssignment()`），跨 15 分鐘邊界的發言要切開。改 `speakerAccuracy()` 時，`server.test.js` 裡的「1 秒覆蓋 10 秒＝10%」「跨視窗」「最佳配對 61.1%」三個案例都要通過。
+- 新的評測結果（模型、端點、組合）要加進 `docs/research/2026-10-21-benchmark-standards.md` 的準確度總表；README 的模型搭配表也要跟著更新。
 
 ## 建置與發版
 

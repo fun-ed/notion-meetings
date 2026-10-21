@@ -56,9 +56,13 @@ summarizing：summarize() 與 suggestSpeakers() 同時執行；建議失敗不�
   - 結果存進 `meeting.speakerHints`，介面按「套用」才會改名。
 - **Benchmark**：
   - 擁有者凍結時，在會議資料夾寫 `reference.json`（講者名字與去掉【?】的文字），並在會議記 `benchmarkAt`。
-  - 管理員執行時，`runBench()` 對每個案例跑 `transcribeClean()`，再用 `benchMetrics()` 算指標，結果寫進 `bench.runs`（保留最近 50 次）。會議本身不會被改動。
+  - 管理員執行時，`runBench()` 對每個案例跑 `transcribeClean()`，再用 `benchMetrics()` 算指標，結果寫進 `bench.runs`（保留最近 50 次），每次附上 `fingerprint`：轉錄模型、校對模型與路徑、團隊術語的 SHA-256 前 8 碼。會議本身不會被改動。
   - 指標：
-    - 講者正確率：輸出標籤與參考名字依共同時間一對一配對，再以時間加權計算；也輸出每 15 分鐘的值。
+    - 講者正確率（`speakerAccuracy()`，0.6.0 修正）：
+      - 輸出標籤與參考名字用匈牙利演算法（`bestAssignment()`）一對一配對，取總共同時間最大的組合。
+      - 只計輸出與參考實際重疊、而且配對正確的時間，再除以參考總時長。
+      - 另外列出漏掉的語音比例（`missed`）。
+      - 每 15 分鐘一個視窗，跨邊界的發言切開計算。
     - CER：去空白標點、簡繁統一後計算。
     - 術語命中、【?】數量。
 

@@ -29,6 +29,7 @@
 - 啟動腳本確認不會把 key 印出。
 - benchmark：新增測試涵蓋「1 秒覆蓋 10 秒發言＝10%」「跨視窗拆開」「最佳配對優於貪婪配對（61.1% 對 38.9%）」；每次執行記錄設定指紋，後台顯示。
 - [benchmark 標準](docs/research/2026-10-21-benchmark-standards.md) 新增「各設定的準確度總表」。
+- 文件同步：架構文件更新講者計分與設定指紋；`meetings-dev`、`stt-research` skill 補上新的計分規則、準確度總表與 LiteLLM 轉錄的評測方式；`CLAUDE.md` 與 README 指向計畫總覽與準確度總表。
 
 ## 0.5.0（2026-10-21）
 

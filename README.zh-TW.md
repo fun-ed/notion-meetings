@@ -143,7 +143,7 @@ mise exec -- npm run build   # 用 Bun 在 dist/ 產生單一執行檔
 |---|---|
 | [docs/decisions.md](docs/decisions.md) | 決策與理由，改程式前先讀 |
 | [docs/architecture.md](docs/architecture.md) | 處理流程、資料欄位、API |
-| [docs/plans/](docs/plans/) | 計畫，檔名是 `YYYY-MM-DD-<主題>.md` |
-| [docs/research/](docs/research/) | 轉錄模型評測 |
+| [docs/plans/](docs/plans/) | 計畫，檔名是 `YYYY-MM-DD-<主題>.md`；總覽是 [下一步](docs/plans/2026-10-21-next-steps.md) |
+| [docs/research/](docs/research/) | 評測報告；所有試過的設定與準確度整理在 [benchmark 標準](docs/research/2026-10-21-benchmark-standards.md) |
 | `.claude/skills/meetings-dev` | 開發、測試、建置與發版 |
 | `.claude/skills/stt-research` | 評估新的轉錄模型 |

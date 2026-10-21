@@ -5,7 +5,7 @@ description: Evaluate a speech-to-text model, audio LLM, or provider for notion-
 
 # 語音轉錄模型評測
 
-目標是用實測證據決定要不要換掉現行組合。現行組合寫在 `docs/decisions.md` 的 D-003 到 D-006，基準數字在 `docs/research/2026-10-20-stt-evaluation.md`。公開排行榜只用來挑候選；能不能用，以 `eval/` 的實測結果為準。
+目標是用實測證據決定要不要換掉現行組合。現行組合寫在 `docs/decisions.md` 的 D-003 到 D-006；所有試過的設定與分數集中在 `docs/research/2026-10-21-benchmark-standards.md` 的「各設定的準確度總表」，新的評測結果也要加進這張表。公開排行榜只用來挑候選；能不能用，以 `eval/` 的實測結果為準。
 
 ## 步驟
 
@@ -28,6 +28,7 @@ description: Evaluate a speech-to-text model, audio LLM, or provider for notion-
    ```
 
    不在 OpenRouter 上的服務商，照 `stt()` 的寫法另外寫一個呼叫函式，計分仍然用 `eval/score.py`。DeepInfra：`POST https://api.deepinfra.com/v1/inference/<model>`，multipart 欄位 `audio`，金鑰在 `~/.config/deepinfra/key`（請使用者在自己的終端機執行 `read -s "K?DeepInfra key: " && mkdir -p ~/.config/deepinfra && printf %s "$K" > ~/.config/deepinfra/key && chmod 600 ~/.config/deepinfra/key && unset K`；用 `curl -s -o /dev/null -w "%{http_code}\n" https://api.deepinfra.com/v1/me -H "Authorization: bearer $(cat ~/.config/deepinfra/key)"` 驗證，200 表示有效）。magpie 上的 Gemini：音訊必須放在 chat 的 `file` 欄位；放在 `input_audio` 會被丟掉，而且模型會編出假逐字稿。
+   - 公司 LiteLLM（D-022）：用 OpenAI 的 multipart 格式 `POST {base_url}/audio/transcriptions`，送 `file`、`model`、`language`、`response_format`；分講者模型用 `diarized_json`，加上 `chunking_strategy=auto`。端點與金鑰讀 `~/.config/litellm/base_url`、`~/.config/litellm/key`，不要寫進 repo、腳本或報告。2026-10-21 的結果在 `docs/research/2026-10-21-litellm.md`：`gpt-4o-transcribe` 系列與 `whisper-1` 都不達標。LiteLLM 加上新的轉錄模型（例如 MAI-Transcribe 2）時，照這個方式重測。
 5. **讀輸出。** 把每個設定的完整 `text` 從頭讀到尾，逐句和 `eval/lines.tsv` 比對，記下原文沒有的數字、句子或語言。完成條件：每個設定都標記為「有編造」或「未發現編造」。
 6. **比較與記錄。** 候選至少要在術語、講者、編造三項都不輸給現行的 MAI＋phraseList（44/36、3/3、未發現編造），才考慮替換。把結果寫進 `docs/research/<日期>-<主題>.md`，格式照既有的評測報告。要替換時，在 `docs/decisions.md` 新增決策，再用 `meetings-dev` skill 實作並跑 `eval/e2e.py`。
 
