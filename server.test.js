@@ -8,7 +8,7 @@ import http from 'node:http';
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'meetings-'));
 process.env.OPENROUTER_API_KEY = ''; // never call the real API from tests
 const ai = await import('./ai.js');
-const { parseTranscription, transcriptText, extOf, toTaiwan, parseTerms, applyNumbered, parseActions, cleanMeta, parseQuery, searchMeetings, parseDirectory, resolver, usageOf, aggregateUsage, migrateLayout, reassignSpeakers, openaiUsage, isTransient, keyScope, viaEnv, apiKeyFor, llmKeyMissing, RETRY, mergeTerms, flagForeignScript, cleanHints, cer, speakerAccuracy, bestAssignment, termHits, localDay, nowIso, searchMeetings: search2, server } = await import('./server.js');
+const { parseTranscription, transcriptText, extOf, toTaiwan, parseTerms, applyNumbered, parseActions, cleanMeta, parseQuery, searchMeetings, parseDirectory, resolver, usageOf, aggregateUsage, migrateLayout, reassignSpeakers, openaiUsage, isTransient, keyScope, viaEnv, apiKeyFor, llmKeyMissing, knowledgeText, RETRY, mergeTerms, flagForeignScript, cleanHints, cer, speakerAccuracy, bestAssignment, termHits, localDay, nowIso, searchMeetings: search2, server } = await import('./server.js');
 
 test('parseTranscription maps verbose_json segments to speaker segments', () => {
   const r = parseTranscription({ language: 'zh', segments: [
@@ -465,6 +465,14 @@ test('OpenAI-compatible endpoint: write-only key, model list, retry on 503 and e
   } finally { fake.close(); }
 });
 
+
+test('team knowledge renders glossary and notes, ignores malformed entries (D-024)', () => {
+  assert.equal(knowledgeText({}), '');
+  assert.equal(knowledgeText({ glossary: 'oops', notes: [1, ' '] }), '');
+  assert.equal(knowledgeText({ glossary: [{ term: 'X', aliases: 'not-a-list' }] }), '<team_knowledge>\n- X\n</team_knowledge>');
+  assert.equal(knowledgeText({ glossary: [{ term: 'EKS', meaning: 'AWS 的 Kubernetes', aliases: ['EKS cluster'] }, { meaning: 'no term' }], notes: [' On-call 先看 runbook '] }),
+    '<team_knowledge>\n- EKS（別名或常見誤聽：EKS cluster）：AWS 的 Kubernetes\n- On-call 先看 runbook\n</team_knowledge>');
+});
 
 test('tidy view drops filler sounds but keeps sentence-final particles (D-023)', () => {
   // tidy lives in the single-file UI; evaluate its one-line definition.

@@ -195,3 +195,4 @@ summarizing：summarize() 與 suggestSpeakers() 同時執行；建議失敗不�
 | `ai.json` | 模型設定、Agent 與各用途的模型（`uses`）；缺少的內建項目在讀取時補上（`ai.withBuiltins`） |
 | `secrets.json` | 後台輸入的 LLM API key，依 Endpoint 存；權限 600，不經任何 API 回傳（D-021） |
 | `learned.json` | 團隊術語、benchmark 案例與歷次結果（D-020）；權限 600 |
+| `knowledge.json` | 團隊知識：術語的意思、別名與常見誤聽、流程筆記；手動編輯，每次摘要都帶入（D-024） |

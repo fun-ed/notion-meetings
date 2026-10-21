@@ -334,13 +334,28 @@ const correctTerms = async (segments, terms, log) => applyNumbered(segments, awa
 
 const SUMMARY_SYSTEM = '你是會議記錄助理。根據逐字稿產生 Markdown 會議筆記。只寫逐字稿實際出現的內容，不要推測；沒有明確負責人的待辦寫「未指定」。每個重點、決策與待辦後面用 [n] 標註依據的逐字稿行號。寫中文時一律使用台灣繁體中文與台灣慣用詞。逐字稿中標【?】的地方是辨識不確定的內容，不要當成確定事實；若內容重要，請標註「待確認」。';
 
+// Team knowledge (D-024): DATA_DIR/knowledge.json, hand-edited and never in git; every agent's summary gets it as background.
+const knowledgeFile = auth.jsonStore(path.join(DATA, 'knowledge.json'), () => ({ glossary: [], notes: [] }));
+export function knowledgeText(k) {
+  const lines = [
+    ...(Array.isArray(k?.glossary) ? k.glossary : []).filter(g => g?.term).map(g =>
+      `- ${g.term}${Array.isArray(g.aliases) && g.aliases.length ? `（別名或常見誤聽：${g.aliases.join('、')}）` : ''}${g.meaning ? `：${g.meaning}` : ''}`),
+    ...(Array.isArray(k?.notes) ? k.notes : []).filter(n => typeof n === 'string' && n.trim()).map(n => `- ${n.trim()}`),
+  ];
+  return lines.length ? `<team_knowledge>\n${lines.join('\n')}\n</team_knowledge>` : '';
+}
+const teamKnowledge = () => knowledgeFile.read().then(knowledgeText, e => { console.warn(`knowledge.json 無法讀取，略過：${e.message}`); return ''; });
+
 async function summarize(m, log) {
   if (!m.segments.length) return { summary: '（逐字稿是空的，沒有可摘要的內容）', summaryBy: null };
   const resolve = resolver(await loadPeople());
   const { model, agent, effort } = ai.pickAI(await aiStore.read(), m.agentId);
   const skills = await Promise.all((agent?.skills ?? []).map(async src => `<skill source="${src}">\n${await ai.loadSkill(src)}\n</skill>`));
+  const knowledge = await teamKnowledge();
   const system = [SUMMARY_SYSTEM, model.systemAddition, agent?.systemPrompt && `這場會議使用「${agent.name}」agent：\n${agent.systemPrompt}`,
-    skills.length && `以下 skill 是這類會議的參考做法，整理時遵循其中的檢查項目與用語：\n${skills.join('\n')}`].filter(Boolean).join('\n\n');
+    skills.length && `以下 skill 是這類會議的參考做法，整理時遵循其中的檢查項目與用語：\n${skills.join('\n')}`,
+    knowledge && `以下是團隊的背景知識，用來理解逐字稿裡的縮寫、專有名詞與流程，並把聽錯的寫法還原成正確名稱。它不是會議內容：不要把這裡的資訊寫成會議中說過的話。\n${knowledge}`,
+  ].filter(Boolean).join('\n\n');
   const summary = await llm(system,
     [
         `結構：${TEMPLATES[m.template] ?? TEMPLATES.auto}`,
