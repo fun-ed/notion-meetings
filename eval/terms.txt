@@ -1,0 +1,45 @@
+release
+p99
+latency
+rollback
+Helm chart
+EKS
+node group
+Karpenter
+HPA
+CPU
+threshold
+Kafka
+consumer lag
+partition
+SRE
+OAuth
+refresh token
+401
+token endpoint
+canary deployment
+Argo Rollouts
+error budget
+Grafana
+PR
+CI
+CodeRabbit
+review
+merge
+main branch
+二代健保
+補充保費
+勞退
+自提
+節稅
+Postgres
+read replica
+PgBouncer
+transaction pooling
+Terraform
+state
+S3
+DynamoDB
+state lock
+IAM role
+IRSA

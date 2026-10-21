@@ -1,0 +1,9 @@
+Meijia	這次 release 的 p99 latency 從一百二十毫秒飆到八百毫秒，我們先 rollback 到上一版的 Helm chart。
+Eddy (Chinese (Taiwan))	EKS 的 node group 要改用 Karpenter，順便把 HPA 的 CPU threshold 調到百分之七十。
+Meijia	Kafka 的 consumer lag 太高，可能是 partition 數不夠，下週三前請 SRE 看一下。
+Eddy (Chinese (Taiwan))	OAuth 的 refresh token 過期了，前端要處理 401，然後重新呼叫 token endpoint。
+Samantha	Let's set up a canary deployment with Argo Rollouts and watch the error budget on Grafana.
+Meijia	這個 PR 要先過 CI，CodeRabbit review 完再 merge 到 main branch。
+Eddy (Chinese (Taiwan))	財務說二代健保補充保費要另外算，勞退自提百分之六可以節稅。
+Samantha	The Postgres read replica is lagging, so we might need PgBouncer in transaction pooling mode.
+Meijia	最後，Terraform 的 state 放在 S3，用 DynamoDB 做 state lock，IAM role 走 IRSA。

@@ -1,0 +1,17 @@
+{
+  "name": "notion-meetings",
+  "version": "0.5.0",
+  "repository": "https://github.com/fun-ed/notion-meetings",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "start:magpie": "ANTHROPIC_BASE_URL=http://127.0.0.1:3425 ANTHROPIC_API_KEY=magpie OPENAI_BASE_URL=http://127.0.0.1:3425/v1 OPENAI_API_KEY=magpie node server.js",
+    "test": "node --test",
+    "build": "bash scripts/build.sh"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.135.0",
+    "opencc-js": "^1.4.2"
+  }
+}

@@ -1,0 +1,12 @@
+node_modules/
+data/
+.memsearch/
+.env
+__pycache__/
+.DS_Store
+# Track project skills despite the global .claude/ ignore; keep other local Claude settings out.
+!.claude/
+.claude/*
+!.claude/skills/
+dist/
+.build/

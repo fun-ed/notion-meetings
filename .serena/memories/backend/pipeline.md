@@ -1,0 +1,21 @@
+# 後端處理流程（server.js）
+
+- 轉錄共用 `transcribeClean(m, log)`：phraseList＝`mergeTerms(會議術語, 團隊術語)`（上限 500）→ OpenCC → `correctTerms` → `flagForeignScript`。摘要時 `summarize()` 與 `suggestSpeakers()` 並行，建議失敗不影響會議。Benchmark：`runBench()` 用同一份流程重跑凍結會議，`benchMetrics()`＝講者正確率（一對一配對、時間加權、每 15 分鐘）、CER、術語命中、【?】數。
+- 狀態：`transcribing` → `correcting`（僅有術語時）→ `summarizing` → `done` | `error`。前端每 2 秒輪詢；`BUSY` 清單在前後端都要同步（server 的 409 檢查、index.html 的 `BUSY`）。
+- `transcribe(m)`：ffmpeg 轉單聲道 16 kHz 48 kbps `transcode.mp3`（用完刪）→ OpenRouter `/api/v1/audio/transcriptions`，model `microsoft/mai-transcribe-2`，JSON base64 `input_audio`，`response_format: verbose_json`，`provider.options.azure.diarization.enabled`，有術語才帶 `azure.phraseList.phrases`（空陣列可能報錯）。`language` 取 `m.lang` 的 `-` 前段；`auto` 不送。
+- MAI 即使 `language: zh` / `zh-TW` 仍輸出簡體 → `toTaiwan`（opencc-js `cn`→`twp`）。只在 `lang === 'zh-TW'` 或 `auto` 且偵測 `zh*` 時轉；`zh-CN` 不轉。
+- `correctTerms()`：送 `[n] text` 行給 Claude（`CORRECT_SYSTEM`），`applyNumbered()` 回填；缺行、越界、空字串保留原文。講者與時間戳不經過 LLM。
+- `claude(system, content, {model, effort})`：model 是 `ai.js` 的設定檔（無參數時用預設模型，校對用這個）；先 `checkContext()`（估 tokens＋maxOutput > contextWindow 就報錯，不截斷）；每個模型可有 baseURL／apiKeyEnv，否則用 `ANTHROPIC_BASE_URL`/`ANTHROPIC_API_KEY`；只有 opus-5-5／sonnet-5-5／fable-5-1 送 `fallbacks: 'default'`；`stop_reason === 'refusal'` 丟錯。
+- 摘要：`pickAI(cfg, m.agentId)` → 停用的 Agent 視同沒有、Agent 指定的模型不可用時退回預設模型、只用 provider=anthropic；系統提示＝`SUMMARY_SYSTEM`＋模型 systemAddition＋Agent 提示＋skills（SKILL.md 路徑或 URL，50KB 上限）；寫入 `summaryBy`。
+- 用量：`claude(..., {log, kind})`、`transcribe(m, log)` 把紀錄推進 `log`，`processMeeting` 的 finally 寫入 `meeting.usage`（失敗也存）。顯示總輸入要加快取讀寫（magpie 自動快取，`input_tokens` 只有個位數）。
+- 資料夾：`data/<本機上傳日>/<id>/`，一律經 `dir(id)`（快取＋掃描日期資料夾）與 `meetingIds()`，不要自己拼 `DATA/id`；啟動時 `migrateLayout()` 搬舊版。
+- magpie 會默默丟掉 `mcp_servers`（2026-10-21 實測），remote MCP 尚未支援。
+- `openrouterKey()`：`OPENROUTER_API_KEY` 定義（含空字串）就用它，否則每次讀 `~/.config/openrouter/key`；空字串＝停用，測試靠這點避免呼叫真 API。
+- `POST /:id/summarize` 的 `retranscribe: true` 會清空 `segments` 讓 `processMeeting` 從轉錄重跑。
+- 講者與參與者（0.3.0）：PATCH 的 `speakers` 經 `cleanSpeakers()`；`segSpeakers {段落索引: 講者編號}` 經 `reassignSpeakers()` 改段落講者（介面支援單段、Shift＋點範圍、「併入…」）；`participants` 經 `cleanMeta()`，`attendees()`＝講者＋participants，摘要提示列出全部參與者。已有摘要時改這些會設 `summaryStale: true`（D-018，不自動重跑），`processMeeting` 完成摘要時清掉。
+- 摘要完成後 `parseActions(summary, 現存 actions)` 寫入 `actions`；`done` 只靠文字完全相同保留。`withActions()` 讓 GET/PATCH/list 對舊會議即時推導。PATCH 的 `actions` 經 `cleanActions()` 清理。
+- 讀取一律經 `view()`／`loadAll()`：`withDefaults()` 補舊會議欄位，`enrich()` 依 `data/directory.json` 補 `people`、`teams`、`actions[].team/leader`；這些衍生欄位不得寫回 `meeting.json`。
+- 搜尋 `searchMeetings()` 為純函式（輸入已 enrich 的會議），`normQ()`＝NFKC＋小寫＋`s2twp`；注意 `s2twp` 會把「台」轉成「臺」，查詢與資料兩邊都轉，所以仍能互相比對。
+- 寫入：`update(id, patch)` 每場會議排隊；依現有內容計算的改動傳函式 `update(id, cur => ({...}))`，不要先 `load()` 再傳結果；暫存檔名每次不同。
+- 實測（2026-10-21，三段內部錄音）：一人主講的會議 MAI 分講者合理；多人快速輪流的站立會議會拆錯也併錯。經 OpenRouter 傳 `maxSpeakers`：camelCase 回 400，snake_case 被忽略。`loudnorm` 沒有幫助。團隊術語表能修正大部分術語誤聽。
+- 已知捷徑（`shortcut:` 註解）：整場一次 base64 請求（長會議可能 413）；校對單次請求（64k 輸出上限）。

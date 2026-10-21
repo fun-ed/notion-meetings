@@ -1,0 +1,1215 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Meetings</title>
+<script>document.documentElement.dataset.theme = localStorage.getItem('theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');</script>
+<style>
+  :root { color-scheme:light; --bg:#fff; --fg:#37352f; --muted:#787774; --faint:#9b9a97; --line:#e9e9e7; --side:#f7f7f5; --hover:#efefed;
+    --accent:#2383e2; --red:#eb5757; --input:#fff; --side-link:#5f5e5b; --placeholder:#e1e1df; --code-bg:#f2f1ee; --mark:#fdecc8;
+    --hl:#fbf3db; --active-bg:#eef5fc; --active-ring:#c7dff5; --uncertain:#fde2dd;
+    --t-gray:#e3e2e0; --t-blue:#d3e5ef; --t-green:#dbeddb; --t-orange:#fadec9; --t-yellow:#fdecc8; --t-red:#ffe2dd; --t-purple:#e8deee; }
+  /* Dark palette follows Notion's dark mode */
+  [data-theme=dark] { color-scheme:dark; --bg:#191919; --fg:#d4d4d4; --muted:#9b9b9b; --faint:#7d7d7d; --line:#2f2f2f; --side:#202020; --hover:#2c2c2c;
+    --accent:#3b8fe0; --red:#e06c63; --input:#252525; --side-link:#a5a5a5; --placeholder:#4a4a4a; --code-bg:#2c2c2c; --mark:#5c4b1e;
+    --hl:#3f3a28; --active-bg:#1d2b3a; --active-ring:#2b4c74; --uncertain:#5c2b28;
+    --t-gray:#373737; --t-blue:#1d3a50; --t-green:#203a2c; --t-orange:#4a3020; --t-yellow:#4a3d1a; --t-red:#4d2623; --t-purple:#372c47; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.6 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC", "Noto Sans TC", sans-serif; color:var(--fg); background:var(--bg);
+    /* Pin the app shell to the viewport edges instead of trusting 100vh, which some browsers size short. */
+    position:fixed; inset:0; display:grid; grid-template-columns:var(--side-w, 240px) minmax(0, 1fr); grid-template-rows:minmax(0, 1fr); }
+  body.side-collapsed { grid-template-columns:0 minmax(0, 1fr); } body.side-collapsed aside { visibility:hidden; }
+  body.anon { grid-template-columns:minmax(0, 1fr); } body.anon aside, body.anon #resizer, body.anon #side-open { display:none; }
+  #resizer { position:fixed; top:0; bottom:0; left:calc(var(--side-w, 240px) - 3px); width:6px; cursor:col-resize; z-index:20; }
+  #resizer:hover, body.resizing #resizer { background:var(--accent); opacity:.35; }
+  body.resizing { cursor:col-resize; user-select:none; }
+  body.side-collapsed #resizer { display:none; }
+  .side-btn { border:0; background:none; color:var(--muted); padding:0 6px; font-size:16px; line-height:1; }
+  #side-open { position:fixed; top:10px; left:10px; z-index:20; display:none; background:var(--side); border:1px solid var(--line); border-radius:6px; padding:2px 8px; }
+  body.side-collapsed #side-open { display:block; }
+  input, textarea, select { background:var(--input); }
+  a { color:inherit; }
+  input[type=checkbox], input[type=radio] { accent-color:var(--accent); }
+  button, select, input, textarea { font:inherit; color:inherit; }
+  button { border:1px solid var(--line); background:var(--input); border-radius:6px; padding:3px 10px; cursor:pointer; }
+  button:hover:not(:disabled) { background:var(--hover); }
+  button:disabled { opacity:.5; cursor:default; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.primary:hover { background:#0b6ec5; }
+  button.rec { background:var(--red); border-color:var(--red); color:#fff; }
+  button.ghost { border-color:transparent; color:var(--muted); }
+  select { border:1px solid var(--line); border-radius:6px; padding:2px 6px; }
+  .muted { color:var(--muted); font-size:14px; }
+  .err { color:var(--red); }
+  .spacer { flex:1; }
+
+  /* Sidebar */
+  aside { background:var(--side); border-right:1px solid var(--line); overflow:auto; padding:10px 6px; font-size:14px; display:flex; flex-direction:column; }
+  aside > * { flex-shrink:0; }
+  aside .ws { font-weight:600; padding:6px 4px 10px 10px; display:flex; align-items:center; }
+  aside .ws .side-btn { margin-left:auto; }
+  aside a { display:flex; gap:8px; align-items:center; padding:3px 10px; border-radius:6px; text-decoration:none; color:var(--side-link); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  aside a:hover, aside a.on { background:var(--hover); color:var(--fg); }
+  aside a.on { font-weight:600; }
+  aside .side-h { color:var(--faint); font-size:12px; padding:14px 10px 4px; }
+
+  /* Page */
+  main { overflow:auto; }
+  .page { max-width:900px; margin:0 auto; padding:24px 96px 120px; }
+  .page.wide { max-width:1200px; }
+  .crumb { font-size:14px; color:var(--muted); margin-bottom:28px; }
+  .crumb a { text-decoration:none; }
+  .crumb a:hover { text-decoration:underline; }
+  .icon { font-size:64px; line-height:1; margin:8px 0 6px; }
+  h1 { font-size:40px; font-weight:700; line-height:1.2; margin:0 0 8px; }
+  h1 input { font:inherit; border:0; outline:none; width:100%; padding:0; background:transparent; }
+  h1 input::placeholder { color:var(--placeholder); }
+  h2.h2 { font-size:22px; font-weight:600; margin:32px 0 6px; }
+
+  /* Properties */
+  .props { margin:8px 0 20px; border-bottom:1px solid var(--line); padding-bottom:14px; }
+  .prop { display:grid; grid-template-columns:160px minmax(0, 1fr); align-items:start; min-height:34px; }
+  .prop > span:first-child { color:var(--muted); font-size:14px; padding:6px 6px 6px 0; }
+  .prop > div { padding:5px 6px; border-radius:4px; font-size:14px; }
+  .prop > div:hover { background:var(--hover); }
+  .prop textarea { width:100%; border:0; background:transparent; resize:vertical; outline:none; padding:0; font-size:14px; min-height:22px; }
+  .prop select { border:0; background:transparent; padding:0; }
+  .prop input:not([type=checkbox]) { border:0; background:transparent; outline:none; padding:0; width:100%; font-size:14px; }
+  .prop .tag-add { width:140px; display:inline-block; }
+  .tag-x { border:0; background:none; padding:0 8px 0 0; margin-left:-4px; color:var(--muted); line-height:1; }
+  a.tag { text-decoration:none; }
+  .kbd { margin-left:auto; color:var(--faint); font-size:12px; }
+  input.search { width:100%; font-size:18px; border:1px solid var(--line); border-radius:8px; padding:8px 12px; outline:none; margin:8px 0 6px; }
+  input.search:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--active-ring); }
+  code { background:var(--code-bg); color:#eb5757; border-radius:3px; padding:0 4px; font-size:13px; }
+  .result { padding:12px 0; border-bottom:1px solid var(--line); }
+  .result .r-title { font-weight:600; font-size:16px; text-decoration:none; }
+  .hit { display:block; text-decoration:none; padding:3px 8px; margin:4px 0 0; border-radius:4px; font-size:14px; }
+  .hit:hover { background:var(--side); }
+  .hit-label { color:var(--muted); font-size:12px; margin-right:6px; }
+  mark { background:var(--mark); color:inherit; border-radius:2px; }
+  .filters { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin:12px 0 4px; }
+  input.search.small { font-size:14px; padding:4px 10px; width:280px; margin:0; }
+  details.group { border-bottom:1px solid var(--line); }
+  details.group > summary { cursor:pointer; list-style:none; display:flex; gap:6px; align-items:center; flex-wrap:wrap; padding:8px 4px; border-radius:4px; }
+  details.group > summary::-webkit-details-marker { display:none; }
+  details.group > summary::before { content:'▸'; color:var(--muted); transition:transform .15s; }
+  details.group[open] > summary::before { transform:rotate(90deg); }
+  details.group > summary:hover { background:var(--side); }
+  details.group > summary a { text-decoration:none; font-weight:600; }
+  details.group > summary a.tag { font-weight:400; }
+  details.group .count { margin-left:auto; color:var(--muted); font-size:13px; background:var(--hover); border-radius:10px; padding:0 8px; }
+  details.group table.db { margin:0 0 10px 18px; width:calc(100% - 18px); }
+  td.chk { width:36px; }
+  td.done { text-decoration:line-through; color:var(--faint); }
+  textarea.csv { width:100%; font:13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; border:1px solid var(--line); border-radius:6px; padding:8px; }
+
+  /* Tags: Notion option colors */
+  .tag { display:inline-block; padding:0 6px; border-radius:3px; font-size:13px; line-height:20px; margin:1px 4px 1px 0; white-space:nowrap; }
+  .gray { background:var(--t-gray); } .blue { background:var(--t-blue); } .green { background:var(--t-green); }
+  .orange { background:var(--t-orange); } .yellow { background:var(--t-yellow); } .red { background:var(--t-red); } .purple { background:var(--t-purple); }
+
+  /* Database views */
+  .views { display:flex; gap:4px; align-items:center; border-bottom:1px solid var(--line); margin:18px 0 0; }
+  .views .view { border:0; border-radius:0; background:none; padding:6px 8px; color:var(--muted); font-size:14px; border-bottom:2px solid transparent; }
+  .views .view.on { color:var(--fg); border-bottom-color:var(--fg); }
+  table.db { width:100%; border-collapse:collapse; font-size:14px; }
+  table.db th { text-align:left; font-weight:400; color:var(--muted); padding:6px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  table.db td { padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  table.db th + th, table.db td + td { border-left:1px solid var(--line); }
+  table.db tbody tr { cursor:pointer; }
+  table.db tbody tr:hover { background:var(--side); }
+  table.db td.name { font-weight:500; }
+  table.db td.nowrap { white-space:nowrap; }
+  .db-foot { padding:6px 8px; color:var(--faint); font-size:14px; }
+  .db-foot a { text-decoration:none; }
+
+  /* AI meeting notes block */
+  .ai-block { border:1px solid var(--line); border-radius:10px; padding:12px 16px 14px; box-shadow:0 1px 2px rgba(15,15,15,.04); }
+  .ai-head { display:flex; gap:10px; align-items:center; font-weight:600; }
+  .ai-head .muted { font-weight:400; }
+  .tabs { display:flex; gap:2px; margin:10px 0 8px; }
+  .tabs .tab { border:0; background:none; color:var(--muted); padding:3px 10px; border-radius:6px; }
+  .tabs .tab.on { background:var(--hover); color:var(--fg); font-weight:600; }
+  .ai-foot { display:flex; gap:10px; align-items:center; flex-wrap:wrap; border-top:1px solid var(--line); margin-top:12px; padding-top:10px; }
+  .ai-foot details { width:100%; }
+  .ai-foot textarea, .notes { width:100%; border:1px solid var(--line); border-radius:6px; padding:6px 8px; min-height:70px; }
+  .notes { border:0; outline:none; min-height:160px; padding:4px 0; resize:vertical; }
+  .ai-start { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:12px 0; }
+  #live { background:var(--side); border-radius:6px; padding:10px 12px; min-height:60px; white-space:pre-wrap; font-size:14px; }
+  #live i { color:var(--muted); }
+  audio { width:100%; height:36px; margin:8px 0 0; }
+
+  .summary h3 { font-size:17px; font-weight:600; margin:16px 0 4px; }
+  .summary ul { margin:2px 0; padding-left:24px; }
+  .summary p { margin:4px 0; }
+  a.cite { font-size:11px; vertical-align:super; text-decoration:none; color:var(--accent); }
+  .todo { display:flex; gap:8px; align-items:baseline; padding:2px 0; cursor:pointer; }
+  .todo input { margin:0; transform:translateY(1px); }
+  .todo.done > span:first-of-type { text-decoration:line-through; color:var(--faint); }
+
+  .speakers { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+  .speakers label { font-size:13px; }
+  .speakers input { width:110px; border:1px solid var(--line); border-radius:6px; padding:1px 6px; }
+  .seg { display:grid; grid-template-columns:52px 96px 1fr; gap:8px; padding:4px 6px; border-radius:4px; font-size:15px;
+    border-left:3px solid transparent; transition:background-color .3s, border-color .3s, box-shadow .3s; }
+  .seg.active { border-left-color:var(--accent); background:var(--active-bg); box-shadow:0 0 0 1px var(--active-ring); animation:seg-glow .7s ease-out; }
+  @keyframes seg-glow { from { box-shadow:0 0 0 5px rgba(35,131,226,.35); } to { box-shadow:0 0 0 1px var(--active-ring); } }
+  .player { display:flex; gap:6px; align-items:center; margin-top:6px; }
+  .player button { font-size:13px; padding:1px 8px; }
+  .player .rate.on { background:var(--fg); border-color:var(--fg); color:var(--bg); }
+  .seg.hl { background:var(--hl); }
+  .seg time { color:var(--accent); cursor:pointer; font-variant-numeric:tabular-nums; }
+  .seg b { font-weight:600; }
+  .seg b.pick { cursor:pointer; } .seg b.pick:hover { text-decoration:underline dotted; }
+  .seg select { font-size:13px; max-width:96px; }
+  .speakers select { font-size:12px; margin-left:4px; }
+  .seg mark { background:var(--uncertain); }
+  .notes { background:transparent; }
+  .auth-box { max-width:380px; margin:12vh auto 0; }
+  .auth-box label { display:block; margin:10px 0; font-size:14px; color:var(--muted); }
+  .auth-box input { display:block; width:100%; margin-top:4px; padding:6px 10px; border:1px solid var(--line); border-radius:6px; color:var(--fg); }
+  .who { padding:6px 10px; font-size:13px; }
+  /* Version and repo, pinned to the bottom of the sidebar */
+  #ver { margin-top:auto; padding:12px 10px 4px; font-size:12px; color:var(--faint); line-height:1.6; }
+  #ver a { display:block; padding:0; color:inherit; } #ver a:hover { background:none; color:var(--fg); } #ver a.tag { display:inline-block; padding:0 6px; }
+  .range-pick { display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin:2px 0 6px 60px; padding:6px 8px; font-size:13px; background:var(--hover); border-radius:6px; }
+  .range-pick input { width:56px; } .seg.in-range { background:var(--hl); }
+  .hints { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin:4px 0 8px; font-size:13px; }
+  .learn-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0; font-size:13px; }
+  .learn-row input { border:1px solid var(--line); border-radius:6px; padding:1px 6px; min-width:220px; }
+  .comment { padding:8px 0; border-bottom:1px solid var(--line); font-size:14px; }
+  .comment > div { white-space:pre-wrap; margin-top:2px; }
+  #cmt { width:100%; min-height:60px; border:1px solid var(--line); border-radius:6px; padding:6px 8px; margin-top:8px; }
+  .notice { background:var(--hl); border-radius:6px; padding:8px 12px; margin:8px 0; font-size:14px; }
+  .share-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; font-size:13px; padding:4px 0; }
+  tr[data-model] input:not([type=checkbox]):not([type=radio]), tr[data-model] select, tr[data-model] textarea { width:100%; min-width:70px; border:1px solid var(--line); border-radius:4px; padding:1px 4px; font-size:13px; }
+  details[data-agent] .props textarea, details[data-agent] .props input { border:1px solid var(--line); border-radius:4px; padding:2px 6px; }
+  .scroll-x { overflow-x:auto; } table.usage th, table.usage td { white-space:nowrap; }
+  table.usage { font-size:12px; margin:4px 0 8px; } table.usage tbody tr { cursor:default; }
+  table.usage tr.err td { color:var(--red); }
+  .share-row input { flex:1; min-width:280px; border:1px solid var(--line); border-radius:6px; padding:2px 6px; font-size:12px; }
+</style>
+</head>
+<body>
+<aside>
+  <div class="ws">🎙️ 會議工作區<button class="side-btn" onclick="toggleSide(true)" title="收合側欄（⌘\）" aria-label="收合側欄">«</button></div>
+  <a href="#new" data-r="new" id="nav-new">＋ 新會議</a>
+  <a href="#" data-r="db">📅 會議紀錄</a>
+  <a href="#search" data-r="search">🔍 搜尋<span class="kbd">⌘K</span></a>
+  <a href="#actions" data-r="actions">✅ Action Items</a>
+  <a href="#people" data-r="people">👥 成員與團隊</a>
+  <div class="side-h">最近的會議</div>
+  <nav id="list"></nav>
+  <div class="side-h">帳號</div>
+  <div id="who"></div>
+  <div id="ver"></div>
+</aside>
+<div id="resizer" title="拖曳調整寬度，雙擊恢復預設" aria-hidden="true"></div>
+<button id="side-open" onclick="toggleSide(false)" title="展開側欄（⌘\）" aria-label="展開側欄">»</button>
+<main id="main"></main>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
+const fmt = t => `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+// Every date and time shows Taiwan time (GMT+8), whatever the browser's time zone.
+const TZ = 'Asia/Taipei';
+const day = iso => new Date(iso).toLocaleDateString('zh-TW', { timeZone: TZ, year: 'numeric', month: 'long', day: 'numeric' });
+const dt = iso => new Date(iso).toLocaleString('zh-TW', { timeZone: TZ, hour12: false });
+const spk = (m, s) => m.speakers?.[s] || `Speaker ${s < 26 ? String.fromCharCode(65 + s) : s + 1}`;
+const COLORS = ['#2383e2', '#d9730d', '#0f7b6c', '#9065b0', '#c14c8a', '#64473a'];
+const TYPES = { auto: ['自動', 'gray'], team: ['團隊會議', 'blue'], standup: ['站立會議', 'green'], sales: ['業務會議', 'orange'] };
+const STATUS = { transcribing: ['轉錄中', 'yellow'], correcting: ['校對術語中', 'yellow'], summarizing: ['產生摘要中', 'yellow'], done: ['完成', 'green'], error: ['失敗', 'red'] };
+const BUSY = ['transcribing', 'correcting', 'summarizing'];
+const LANGS = [['zh-TW', '中文（台灣，含中英夾雜）'], ['auto', '自動偵測'], ['zh-CN', '中文（簡體）'], ['en', 'English'], ['ja', '日本語'], ['ko', '한국어'],
+  ['es', 'Español'], ['fr', 'Français'], ['de', 'Deutsch'], ['pt', 'Português'], ['ru', 'Русский'], ['th', 'ไทย'], ['vi', 'Tiếng Việt'],
+  ['nl', 'Nederlands'], ['sv', 'Svenska'], ['da', 'Dansk'], ['fi', 'Suomi'], ['no', 'Norsk']];
+const tag = ([text, color]) => `<span class="tag ${color}">${esc(text)}</span>`;
+const TAG_COLORS = ['blue', 'green', 'orange', 'purple', 'yellow', 'red', 'gray'];
+const tagColor = t => TAG_COLORS[[...t].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % TAG_COLORS.length];
+// Tags, teams and leaders link to a filtered search, like clicking a multi-select option in Notion.
+const qLink = (op, v, color, prefix = '') => `<a class="tag ${color}" href="#search=${encodeURIComponent(`${op}:${/\s/.test(v) ? `"${v}"` : v}`)}" onclick="event.stopPropagation()">${prefix}${esc(v)}</a>`;
+const tagLink = t => qLink('tag', t, tagColor(t));
+const teamLink = t => qLink('team', t, tagColor(t), '🏢 ');
+const leaderLink = l => qLink('leader', l, 'gray', '👔 ');
+const localInput = iso => new Date(iso).toLocaleString('sv', { timeZone: TZ }).replace(' ', 'T').slice(0, 16);
+const whenLabel = m => m.scheduledAt ? m.scheduledAt.replace('T', ' ').replaceAll('-', '/') : day(m.createdAt);
+const allTags = () => [...new Set(meetings.flatMap(m => m.tags))].sort();
+const num = n => Math.round(n ?? 0).toLocaleString();
+const secs = ms => `${((ms ?? 0) / 1000).toFixed(1)} 秒`;
+const KIND = { transcribe: '轉錄', correct: '術語校對', summary: '摘要', speakers: '講者建議', test: '連線測試' };
+const usd = n => n ? `$${n.toFixed(4)}` : '';
+// Anthropic's input_tokens excludes cached input; the real prompt size is input + cache read + cache write.
+const inTotal = e => (e.inputTokens ?? 0) + (e.cacheReadTokens ?? 0) + (e.cacheWriteTokens ?? 0);
+// Per-call AI usage table (meeting page and admin share the column layout).
+const usageRows = rows => `<div class="scroll-x"><table class="db usage"><thead><tr><th>時間</th><th>項目</th><th>模型</th><th>effort</th><th>總輸入</th><th>輸出</th><th>其中快取讀／寫</th><th>音訊</th><th>費用</th><th>耗時</th></tr></thead><tbody>
+  ${rows.map(e => `<tr${e.error ? ' class="err"' : ''}><td class="nowrap">${dt(e.at)}</td><td>${KIND[e.kind] ?? esc(e.kind)}${e.error ? ` ⚠ ${esc(e.error)}` : ''}</td>
+    <td>${esc(e.label ?? e.model)}</td><td>${esc(e.effort ?? '')}</td><td>${e.provider !== 'openrouter' ? num(inTotal(e)) : ''}</td><td>${e.provider !== 'openrouter' ? num(e.outputTokens) : ''}</td>
+    <td>${e.provider !== 'openrouter' ? `${num(e.cacheReadTokens)}／${num(e.cacheWriteTokens)}` : ''}</td><td>${e.audioSeconds ? fmt(e.audioSeconds) : ''}</td><td>${usd(e.costUsd)}</td><td class="nowrap">${secs(e.ms)}</td></tr>`).join('')}</tbody></table></div>`;
+const totalOf = rows => ({ calls: rows.length,
+  ...Object.fromEntries(['inputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'outputTokens', 'ms', 'audioSeconds', 'costUsd'].map(f => [f, rows.reduce((a, e) => a + (e[f] ?? 0), 0)])) });
+const usageLine = t => `${t.calls} 次 · 輸入 ${num(inTotal(t))}／輸出 ${num(t.outputTokens)} tokens · 耗時 ${secs(t.ms)}`
+  + (t.audioSeconds ? ` · 音訊 ${fmt(t.audioSeconds)}` : '') + (t.costUsd ? ` · 轉錄費用 ${usd(t.costUsd)}` : '');
+const prop = (icon, label, html) => `<div class="prop"><span>${icon} ${label}</span><div>${html}</div></div>`;
+let rate = +localStorage.getItem('rate') || 1, activeSeg = 0, pick = null; // pick: open speaker range picker {from, to}
+let meetings = [], current = null, pollTimer = null, tab = 'summary', showRaw = false, searchQ = '', searchTimer;
+let me = null, authInfo = {}, aiCfg = { models: [], agents: [] }, teamTerms = []; // teamTerms: enabled team glossary (learning loop P1)
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+const rank = level => ['none', 'view', 'comment', 'edit', 'owner'].indexOf(level);
+const json = (method, body) => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+const ROLES = { admin: '管理員', member: '成員', readonly: '唯讀' };
+const ACCESS = [['private', '只有我（與管理員）'], ['view', '所有登入者可檢視'], ['comment', '所有登入者可留言'], ['edit', '所有登入者可編輯']];
+const PERMS = { view: '檢視', comment: '留言', edit: '編輯', owner: '擁有者' };
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, opts);
+  const body = await res.json();
+  // Expired or missing session: back to the login screen (the auth endpoints report their own errors).
+  if (res.status === 401 && !path.startsWith('/api/auth/')) { me = null; showLogin('login'); }
+  if (!res.ok) throw new Error(body.error || res.statusText);
+  return body;
+}
+
+// ---- 登入、個人設定、管理後台 ----
+function setTheme(t) { document.documentElement.dataset.theme = t; localStorage.setItem('theme', t); renderWho(); }
+
+function renderWho() {
+  if (!me) return;
+  const dark = document.documentElement.dataset.theme === 'dark';
+  $('#who').innerHTML = `<div class="who">👤 ${esc(me.displayName)} ${tag([ROLES[me.role], me.role === 'admin' ? 'red' : me.role === 'readonly' ? 'gray' : 'blue'])}</div>
+    <a href="#me" data-r="me">⚙️ 個人設定</a>${me.role === 'admin' ? '<a href="#admin" data-r="admin">🛡️ 管理後台</a>' : ''}
+    <a href="#" onclick="setTheme('${dark ? 'light' : 'dark'}'); return false">${dark ? '☀️ 亮色模式' : '🌙 暗色模式'}</a>
+    <a href="#" onclick="logout(); return false">🚪 登出</a>
+`;
+  const app = authInfo.app; // missing when an older server is still running
+  $('#ver').innerHTML = app ? `<a href="${esc(app.repo)}" target="_blank" rel="noopener" title="GitHub repo">notion-meetings v${esc(app.version)}<br>${esc(app.repo.replace(/^https:\/\//, ''))}</a>
+    ${latest ? `<a class="tag green" href="${esc(latest.url)}" target="_blank" rel="noopener">⬆ 有新版 v${esc(latest.v)}</a>`
+      : `<a href="${esc(app.repo)}/releases" target="_blank" rel="noopener">版本紀錄 →</a>`}` : '';
+  checkLatest();
+  $('#nav-new').hidden = me.role === 'readonly';
+}
+
+function showLogin(mode = authInfo.needsSetup ? 'register' : 'login') {
+  stop();
+  document.body.classList.add('anon');
+  const reg = mode === 'register';
+  page(`<div class="auth-box"><div class="icon">🎙️</div><h1>${reg ? (authInfo.needsSetup ? '建立管理員帳號' : '註冊') : '登入'}</h1>
+    ${authInfo.needsSetup ? '<p class="muted">這是第一個帳號，會成為管理員；之後可以在管理後台關閉註冊。</p>' : ''}
+    <form onsubmit="return submitAuth(event, '${reg ? 'register' : 'login'}')">
+      <label>帳號<input name="username" autocomplete="username" required></label>
+      ${reg ? '<label>顯示名稱<input name="displayName" placeholder="例如：小美（用來對應講者與待辦負責人）"></label>' : ''}
+      <label>密碼<input name="password" type="password" autocomplete="${reg ? 'new-password' : 'current-password'}" required ${reg ? 'minlength="8"' : ''}></label>
+      <button class="primary">${reg ? '建立帳號' : '登入'}</button> <span id="authmsg" class="err"></span>
+    </form>
+    ${!reg && authInfo.registration ? '<p class="muted">還沒有帳號？<a href="#" onclick="showLogin(\'register\'); return false">註冊</a></p>' : ''}
+    ${reg && !authInfo.needsSetup ? '<p class="muted"><a href="#" onclick="showLogin(\'login\'); return false">回到登入</a></p>' : ''}</div>`);
+}
+
+async function submitAuth(e, mode) {
+  e.preventDefault();
+  try { await api(`/api/auth/${mode}`, json('POST', Object.fromEntries(new FormData(e.target)))); boot(); }
+  catch (err) { $('#authmsg').textContent = err.message; }
+  return false;
+}
+
+// Once per session, ask GitHub for the latest release; the sidebar shows it when it is newer than this server.
+let latest = null, latestChecked = false;
+const newerThan = (v, cur) => { const a = v.split('.').map(Number), b = cur.split('.').map(Number), i = a.findIndex((x, k) => x !== (b[k] ?? 0)); return i >= 0 && a[i] > (b[i] ?? 0); };
+async function checkLatest() {
+  // An older server (UI reloaded before the server restarted) sends no app info: skip instead of breaking login.
+  if (latestChecked || !authInfo.app?.repo?.startsWith('https://github.com/')) return;
+  latestChecked = true;
+  try {
+    const r = await (await fetch(`https://api.github.com/repos/${authInfo.app.repo.slice(19)}/releases/latest`)).json();
+    const v = String(r.tag_name ?? '').replace(/^v/, '');
+    if (/^\d+(\.\d+)*$/.test(v) && newerThan(v, authInfo.app.version)) { latest = { v, url: r.html_url }; renderWho(); }
+  } catch {} // offline or rate-limited: keep the plain link
+}
+
+async function logout() { await api('/api/auth/logout', json('POST', {})); me = null; boot(); }
+
+async function boot() {
+  authInfo = await api('/api/auth/me');
+  me = authInfo.user;
+  document.body.classList.toggle('anon', !me);
+  if (!me) return showLogin();
+  renderWho();
+  loadDir().catch(() => {}); // feeds speaker-name autocomplete
+  loadTeamTerms().catch(() => {});
+  aiCfg = await api('/api/ai');
+  if (me.mustChangePassword && location.hash !== '#me') location.hash = 'me'; else route();
+}
+
+async function showMe() {
+  stop();
+  await Promise.all([refreshList(), loadDir().catch(() => {})]);
+  const p = me.profile;
+  page(`<div class="icon">⚙️</div><h1>個人設定</h1>
+    ${me.mustChangePassword ? '<p class="notice">管理員重設了你的密碼，請先在下方設定新密碼。</p>' : ''}
+    <p class="muted">這裡的團隊、Y leader、團隊成員與常合作群組，會和「成員與團隊」名錄合併，用來對應講者、待辦負責人，以及搜尋 <code>team:</code> <code>leader:</code> <code>group:</code>。</p>
+    <div class="props">
+      ${prop('👤', '帳號', `${esc(me.username)} ${tag([ROLES[me.role], 'gray'])}`)}
+      ${prop('🪪', '顯示名稱', `<input id="pf-name" value="${esc(me.displayName)}" aria-label="顯示名稱">`)}
+      ${prop('🏢', '團隊', `<input id="pf-team" list="dl-teams" value="${esc(p.team)}" placeholder="例如：Platform team（可從清單選）" aria-label="團隊">`)}
+      ${prop('👔', 'Y leader', `<input id="pf-leader" list="dl-leaders" value="${esc(p.leader)}" placeholder="你的主管（可從清單選）" aria-label="Y leader">`)}
+      ${prop('👥', '團隊成員', `<textarea id="pf-members" rows="2" placeholder="用逗號分隔" aria-label="團隊成員">${esc(p.members.join(', '))}</textarea>`)}
+      ${prop('🤝', '常合作群組', `<textarea id="pf-groups" rows="3" placeholder="一行一個群組：群組名: 成員1, 成員2" aria-label="常合作群組">${esc(p.groups.map(g => `${g.name}: ${g.members.join(', ')}`).join('\n'))}</textarea>`)}
+    </div>
+    <div class="row"><button class="primary" onclick="saveProfile()">儲存個人資料</button> <span id="pf-msg" class="muted"></span></div>
+    <h2 class="h2">變更密碼</h2>
+    <div class="props">
+      ${prop('🔑', '目前密碼', '<input id="pw-cur" type="password" autocomplete="current-password" aria-label="目前密碼">')}
+      ${prop('🆕', '新密碼', '<input id="pw-new" type="password" autocomplete="new-password" minlength="8" placeholder="至少 8 個字" aria-label="新密碼">')}
+    </div>
+    <div class="row"><button onclick="changePassword()">變更密碼</button> <span id="pw-msg" class="muted"></span></div>`);
+}
+
+async function saveProfile() {
+  try {
+    const names = directory.people.map(p => p.name), groups = uniq(directory.people.flatMap(p => p.groups ?? []));
+    me = (await api('/api/me/profile', json('PUT', { displayName: $('#pf-name').value, team: canon($('#pf-team').value, uniq(directory.people.map(p => p.team))),
+      leader: canon($('#pf-leader').value, uniq([...directory.people.map(p => p.leader), ...names])), members: canonList($('#pf-members').value, names),
+      groups: $('#pf-groups').value.split('\n').map(l => { const [g, ...rest] = l.split(/[:：]/); return { name: canon(g, groups), members: canonList(rest.join(','), names) }; }).filter(g => g.name) }))).user;
+    await loadDir().catch(() => {});
+    renderWho();
+    $('#pf-msg').textContent = '已儲存';
+  } catch (e) { $('#pf-msg').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+}
+
+async function changePassword() {
+  try {
+    await api('/api/me/password', json('PUT', { current: $('#pw-cur').value, next: $('#pw-new').value }));
+    me.mustChangePassword = false;
+    $('#pw-msg').textContent = '密碼已變更';
+  } catch (e) { $('#pw-msg').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+}
+
+async function showAdmin() {
+  stop();
+  const a = await api('/api/admin');
+  const when = iso => iso ? dt(iso) : '—';
+  page(`<div class="icon">🛡️</div><h1>管理後台</h1>
+    <h2 class="h2">註冊</h2>
+    <label><input type="checkbox" ${a.settings.registration ? 'checked' : ''} onchange="adminSet({ registration: this.checked })"> 開放新使用者註冊</label>
+    <h2 class="h2">使用者</h2>
+    <table class="db"><thead><tr><th>帳號</th><th>名稱</th><th>角色</th><th>團隊</th><th>建立時間</th><th>密碼</th></tr></thead><tbody>
+    ${a.users.map(u => `<tr><td>${esc(u.username)}</td><td>${esc(u.displayName)}</td>
+      <td><select aria-label="角色" onchange="setRole('${u.id}', this.value)" ${u.id === me.id ? 'disabled' : ''}>${Object.entries(ROLES).map(([v, t]) => `<option value="${v}" ${u.role === v ? 'selected' : ''}>${t}</option>`).join('')}</select></td>
+      <td>${esc(u.profile?.team ?? '')}</td><td class="nowrap">${when(u.createdAt)}</td>
+      <td id="pw-${u.id}"><button onclick="resetPassword('${u.id}')">重設密碼</button>${u.mustChangePassword ? ' <span class="muted">待使用者變更</span>' : ''}</td></tr>`).join('')}</tbody></table>
+    <h2 class="h2">分享連結</h2>
+    <table class="db"><thead><tr><th>會議</th><th>權限</th><th>建立者</th><th>建立時間</th><th>使用次數</th><th>最後使用</th><th>狀態</th></tr></thead><tbody>
+    ${a.shares.map(s => `<tr><td><a href="#${s.meetingId}">📄 ${esc(s.meetingTitle)}</a></td><td>${tag([PERMS[s.perm], 'blue'])}</td><td>${esc(s.createdByName)}</td>
+      <td class="nowrap">${when(s.createdAt)}</td><td>${s.uses ?? 0}</td><td class="nowrap">${when(s.lastUsedAt)}</td>
+      <td>${s.revokedAt ? `${tag(['已撤銷', 'gray'])} <span class="muted">${when(s.revokedAt)}</span>` : `${tag(['有效', 'green'])} <button onclick="revokeShare('${s.token}')">撤銷</button>`}</td></tr>`).join('')
+      || '<tr><td colspan="7" class="muted">還沒有分享連結</td></tr>'}</tbody></table>
+    <h2 class="h2">📊 AI 用量</h2>
+    ${a.usage.total ? `<p>合計：${usageLine(a.usage.total)}</p>
+      <p class="muted">轉錄費用是 OpenRouter 回報的實際金額。總輸入＝未快取輸入＋快取讀取＋快取寫入；Claude 走 magpie 時是 gateway 回報的值，可能包含 gateway 自己加入的提示。輸出 tokens 已包含 thinking。</p>
+      ${[['依項目', '項目', a.usage.byKind, k => KIND[k] ?? k], ['依模型', '模型', a.usage.byModel, k => k], ['依日期（最近 30 天）', '日期', a.usage.byDay, k => k]].map(([title, col, rows, label]) => `<h3>${title}</h3>
+      <table class="db usage"><thead><tr><th>${col}</th><th>次數</th><th>失敗</th><th>總輸入</th><th>輸出</th><th>其中快取讀／寫</th><th>音訊</th><th>費用</th><th>耗時</th></tr></thead><tbody>
+      ${rows.map(r => `<tr><td>${esc(label(r.key))}</td><td>${r.calls}</td><td>${r.errors || ''}</td><td>${num(inTotal(r))}</td><td>${num(r.outputTokens)}</td>
+        <td>${num(r.cacheReadTokens)}／${num(r.cacheWriteTokens)}</td><td>${r.audioSeconds ? fmt(r.audioSeconds) : ''}</td><td>${usd(r.costUsd)}</td><td class="nowrap">${secs(r.ms)}</td></tr>`).join('')}</tbody></table>`).join('')}`
+      : '<p class="muted">還沒有 AI 呼叫紀錄。</p>'}
+    <div id="learn-admin"></div>
+    <div id="ai-admin"></div>`, true);
+  renderLearnAdmin();
+  aiCfg = await api('/api/ai');
+  renderAIAdmin();
+}
+
+// ---- 管理後台：學習（團隊術語、benchmark）----
+async function renderLearnAdmin(msg = '') {
+  if (!meetings.length) await refreshList();
+  const d = await api('/api/learned'), byId = Object.fromEntries(meetings.map(m => [m.id, m]));
+  const src = s => s.startsWith('meeting:') ? `<a href="#${esc(s.slice(8))}">📄 ${esc(byId[s.slice(8)]?.title ?? '會議')}</a>` : '手動加入';
+  const pct = v => (v == null ? '—' : `${v}%`);
+  $('#learn-admin').innerHTML = `<h2 class="h2">🧠 學習</h2>
+    <p class="muted">團隊術語會在每場轉錄時加入 MAI 術語清單與 Claude 校對；會議的術語會自動加進來。停用的術語不套用。設計見 docs/plans/2026-10-21-learning-loop.md。</p>
+    <h3>團隊術語（${d.terms.filter(t => t.enabled !== false).length} 個啟用）</h3>
+    <div class="learn-row"><input aria-label="新增團隊術語" placeholder="新增術語，用逗號分隔" onchange="adminAddTerm(this)"> <span class="muted">${esc(msg)}</span></div>
+    <table class="db"><thead><tr><th>術語</th><th>來源</th><th>加入時間</th><th>啟用</th><th></th></tr></thead><tbody>
+    ${d.terms.map(t => `<tr><td>${esc(t.term)}</td><td>${src(t.source)}</td><td class="nowrap">${dt(t.addedAt)}</td>
+      <td><input type="checkbox" aria-label="啟用 ${esc(t.term)}" ${t.enabled !== false ? 'checked' : ''} onchange="adminTerm(${esc(JSON.stringify(t.term))}, this.checked)"></td>
+      <td><button class="ghost" onclick="adminTerm(${esc(JSON.stringify(t.term))}, null)">刪除</button></td></tr>`).join('') || '<tr><td colspan="5" class="muted">還沒有團隊術語</td></tr>'}</tbody></table>
+    <h3>Benchmark</h3>
+    <p class="muted">在會議的逐字稿分頁校正講者後「凍結為 benchmark」。執行時用目前的設定重新轉錄每場凍結的會議（會呼叫 OpenRouter 與 Claude），不會改動會議本身。講者正確率以時間加權；CER 去掉空白與標點、簡繁統一後計算。</p>
+    <div class="learn-row">${d.bench.cases.length} 場凍結的會議：${d.bench.cases.map(c => `<a href="#${esc(c.meetingId)}">📄 ${esc(byId[c.meetingId]?.title ?? c.meetingId)}</a>`).join('、') || '—'}
+      <button onclick="runBench()" ${d.bench.running || !d.bench.cases.length ? 'disabled' : ''}>${d.bench.running ? `⏳ 執行中（${dt(d.bench.running.startedAt)} 開始）` : '▶ 執行 benchmark'}</button>
+      ${d.bench.lastError ? `<span class="err">上次失敗：${esc(d.bench.lastError)}</span>` : ''}</div>
+    <div class="scroll-x"><table class="db usage"><thead><tr><th>時間</th><th>版本</th><th>團隊術語</th><th>講者正確率</th><th>CER</th><th>費用</th><th>耗時</th><th>各場</th></tr></thead><tbody>
+    ${[...d.bench.runs].reverse().map(r => `<tr><td>${dt(r.finishedAt)}</td><td>${esc(r.version)}</td><td>${r.teamTerms}</td><td>${pct(r.speakerAccuracy)}</td><td>${pct(r.cer)}</td>
+      <td>${usd(r.costUsd)}</td><td>${secs(r.ms)}</td><td>${r.cases.map(c => c.error ? `<span class="err">${esc(c.error)}</span>`
+        : `${esc(c.title)}：講者 ${pct(c.accuracy)}（每 15 分 ${c.windows.map(pct).join('／')}；${c.labels}／${c.refSpeakers} 位）· CER ${pct(c.cer)} · 術語 ${c.terms.hit}/${c.terms.all} · 【?】${c.unsure}`).join('<br>')}</td></tr>`).join('')
+      || '<tr><td colspan="8" class="muted">還沒有執行紀錄</td></tr>'}</tbody></table></div>`;
+  if (d.bench.running) setTimeout(() => location.hash === '#admin' && renderLearnAdmin(), 5000);
+}
+async function adminAddTerm(input) {
+  try { await api('/api/learned/terms', json('POST', { term: input.value })); renderLearnAdmin('已加入'); loadTeamTerms(); } catch (e) { alert(e.message); }
+}
+async function adminTerm(term, enabled) {
+  try {
+    if (enabled === null) { if (!confirm(`刪除團隊術語「${term}」？`)) return; await api(`/api/learned/terms?term=${encodeURIComponent(term)}`, { method: 'DELETE' }); }
+    else await api('/api/learned/terms', json('PATCH', { term, enabled }));
+    renderLearnAdmin(); loadTeamTerms();
+  } catch (e) { alert(e.message); }
+}
+async function runBench() {
+  try { await api('/api/learned/bench', json('POST', {})); renderLearnAdmin(); } catch (e) { alert(e.message); }
+}
+
+// ---- 管理後台：模型與 Agent ----
+function renderAIAdmin(msg = '') {
+  const opt = (vals, cur, labels = vals) => vals.map((v, i) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(labels[i])}</option>`).join('');
+  const usable = aiCfg.models.filter(m => m.enabled && m.provider !== 'gemini');
+  const test = t => !t ? '<span class="muted">未測試</span>'
+    : `${tag(t.ok ? ['正常', 'green'] : ['失敗', 'red'])} <span class="muted">${dt(t.at)} · ${t.latencyMs} ms${t.usage ? ` · ${num(inTotal(t.usage))}→${num(t.usage.outputTokens)} tokens` : ''}${t.error ? ` · ${esc(t.error)}` : ''}</span>`;
+  $('#ai-admin').innerHTML = `<h2 class="h2">🤖 模型</h2>
+    <p class="muted">每個模型設定自己的 LLM Endpoint 與 API key。「OpenAI 相容」適用公司 LiteLLM、magpie、OpenAI 等 <code>/v1/chat/completions</code> 端點；「Anthropic」是原生 Anthropic API。
+      Endpoint 留空時，OpenAI 相容用 <code>OPENAI_BASE_URL</code>，Anthropic 用 <code>ANTHROPIC_BASE_URL</code>。API key 只存在這台電腦的 <code>data/secrets.json</code>，同一個 Endpoint 的模型共用，存了之後看不到完整內容；也可以改填環境變數名稱。
+      <b>逐字稿與筆記會送到這裡設定的端點</b>。送出前會檢查內容加輸出上限是否超過 context window。</p>
+    <div class="scroll-x"><table class="db"><thead><tr><th>啟用</th><th>預設</th><th>名稱／附加提示</th><th>Provider</th><th>LLM Endpoint</th><th>API key</th><th>Model ID</th><th>Context</th><th>輸出上限</th><th>Effort</th><th>測試</th></tr></thead><tbody>
+    ${aiCfg.models.map((m, i) => `<tr data-model data-i="${i}">
+      <td><input type="checkbox" data-f="enabled" ${m.enabled ? 'checked' : ''} aria-label="啟用 ${esc(m.label)}"></td>
+      <td><input type="radio" name="defmodel" data-f="default" ${m.default ? 'checked' : ''} aria-label="預設模型"></td>
+      <td><input data-f="label" value="${esc(m.label)}" aria-label="名稱"><details><summary class="muted">附加提示</summary><textarea data-f="systemAddition" rows="3" aria-label="附加提示">${esc(m.systemAddition)}</textarea></details></td>
+      <td><select data-f="provider" aria-label="Provider">${opt(['openai', 'anthropic', 'gemini'], m.provider, ['OpenAI 相容（LiteLLM）', 'Anthropic', 'Gemini（規劃中）'])}</select></td>
+      <td><input data-f="baseURL" value="${esc(m.baseURL)}" placeholder="${m.provider === 'openai' ? '例如 https://litellm.公司/v1，留空用 OPENAI_BASE_URL' : '留空用 ANTHROPIC_BASE_URL'}" aria-label="LLM Endpoint"></td>
+      <td><input type="password" data-key autocomplete="off" placeholder="${m.keyStatus?.set ? `已設定（…${esc(m.keyStatus.last4)}）` : '輸入 API key'}" aria-label="API key">
+        <button class="ghost" onclick="saveKey(${i})">儲存</button>${m.keyStatus?.set ? `<button class="ghost" onclick="saveKey(${i}, true)">清除</button>` : ''}
+        <details><summary class="muted">改用環境變數</summary><input data-f="apiKeyEnv" value="${esc(m.apiKeyEnv)}" placeholder="例如 LITELLM_API_KEY" aria-label="API key 環境變數"></details></td>
+      <td><input data-f="model" list="dl-models-${i}" value="${esc(m.model)}" aria-label="Model ID"><datalist id="dl-models-${i}"></datalist>
+        ${m.provider === 'openai' ? `<button class="ghost" onclick="listModels(${i})">讀取模型</button><span class="muted" id="ml-${i}"></span>` : ''}</td>
+      <td><input type="number" data-f="contextWindow" value="${m.contextWindow}" min="0" step="1000" aria-label="Context window"></td>
+      <td><input type="number" data-f="maxOutput" value="${m.maxOutput}" min="0" max="128000" step="1000" aria-label="輸出上限"></td>
+      <td><select data-f="effort" aria-label="Effort">${opt(EFFORTS, m.effort)}</select></td>
+      <td><button onclick="testModel('${esc(m.id)}')">測試</button><div>${test(m.test)}</div></td></tr>`).join('')}</tbody></table></div>
+    <div class="learn-row" data-uses>用途：術語校對用 <select data-use="correct" aria-label="術語校對模型">${opt(['', ...usable.map(m => m.id)], aiCfg.uses?.correct ?? '', ['預設模型', ...usable.map(m => m.label)])}</select>
+      講者建議用 <select data-use="speakers" aria-label="講者建議模型">${opt(['', ...usable.map(m => m.id)], aiCfg.uses?.speakers ?? '', ['預設模型', ...usable.map(m => m.label)])}</select>
+      <span class="muted">摘要依會議的 Agent 設定</span></div>
+    <h2 class="h2">🧩 Agents</h2>
+    <p class="muted">Agent 是會議的預設系統提示。前台選了 Agent，摘要會依它的焦點整理；可指定模型與 effort（留空則用預設模型）。Skills 一行一個 SKILL.md 路徑或 URL，內容會放進系統提示。Remote MCP 目前不支援（magpie 不轉送，見 docs/plans/2026-10-20-roadmap.md）。</p>
+    ${aiCfg.agents.map((a, i) => `<details class="group" data-agent data-i="${i}">
+      <summary><input type="checkbox" data-f="enabled" ${a.enabled ? 'checked' : ''} aria-label="啟用 ${esc(a.name)}" onclick="event.stopPropagation()">
+        <b>${esc(a.name)}</b> <span class="muted">${esc(a.description)}</span>${a.builtin ? tag(['內建', 'gray']) : tag(['自訂', 'purple'])}</summary>
+      <div class="props">
+        ${prop('🏷', '名稱', `<input data-f="name" value="${esc(a.name)}" aria-label="名稱">`)}
+        ${prop('📝', '說明', `<input data-f="description" value="${esc(a.description)}" aria-label="說明">`)}
+        ${prop('🤖', '模型', `<select data-f="model" aria-label="模型">${opt(['', ...aiCfg.models.map(m => m.id)], a.model, ['預設模型', ...aiCfg.models.map(m => m.label)])}</select>`)}
+        ${prop('🧠', 'Effort', `<select data-f="effort" aria-label="Effort">${opt(['', ...EFFORTS], a.effort, ['跟模型設定', ...EFFORTS])}</select>`)}
+        ${prop('💬', '系統提示', `<textarea data-f="systemPrompt" rows="5" aria-label="系統提示">${esc(a.systemPrompt)}</textarea>`)}
+        ${prop('📚', 'Skills', `<textarea data-f="skills" rows="2" placeholder="~/.agents/skills/xxx/SKILL.md 或 https://…/SKILL.md" aria-label="Skills">${esc(a.skills.join('\n'))}</textarea>`)}
+      </div>${a.builtin ? '' : `<button onclick="removeAgent(${i})">刪除這個 Agent</button>`}</details>`).join('')}
+    <div class="row"><button onclick="addAgent()">＋ 新增 Agent</button><button class="primary" onclick="saveAI()">儲存模型與 Agent 設定</button> <span id="ai-msg" class="muted">${esc(msg)}</span></div>`;
+}
+
+function collectAI() {
+  const val = el => el.type === 'checkbox' || el.type === 'radio' ? el.checked : el.type === 'number' ? +el.value : el.value;
+  const read = (sel, base) => [...document.querySelectorAll(sel)].map(row => {
+    const o = { ...base[+row.dataset.i] };
+    row.querySelectorAll('[data-f]').forEach(el => { o[el.dataset.f] = val(el); });
+    return o;
+  });
+  const uses = Object.fromEntries([...document.querySelectorAll('[data-use]')].map(el => [el.dataset.use, el.value]));
+  return { models: read('[data-model]', aiCfg.models), agents: read('[data-agent]', aiCfg.agents), uses };
+}
+
+async function saveAI(msg = '已儲存') {
+  try { aiCfg = await api('/api/admin/ai', json('PUT', collectAI())); renderAIAdmin(msg); }
+  catch (e) { $('#ai-msg').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+}
+function addAgent() { aiCfg = { ...aiCfg, ...collectAI() }; aiCfg.agents.push({ id: `a${Date.now()}`, name: '新的 Agent', description: '', systemPrompt: '', model: '', effort: '', skills: [], enabled: true, builtin: false }); renderAIAdmin(); }
+function removeAgent(i) { aiCfg = { ...aiCfg, ...collectAI() }; aiCfg.agents.splice(i, 1); renderAIAdmin('刪除後記得儲存'); }
+// The key is stored per endpoint, so save the row (its endpoint) first; the key itself never comes back.
+async function saveKey(i, clear = false) {
+  const key = clear ? '' : document.querySelector(`[data-model][data-i="${i}"] [data-key]`).value.trim();
+  if (!clear && !key) return;
+  await saveAI('儲存中…');
+  try { aiCfg = await api('/api/admin/ai/keys', json('PUT', { modelId: aiCfg.models[i].id, key })); renderAIAdmin(clear ? 'API key 已清除' : 'API key 已儲存'); }
+  catch (e) { $('#ai-msg').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+}
+async function listModels(i) {
+  await saveAI('讀取模型中…');
+  try {
+    const { models } = await api(`/api/admin/ai/models/${encodeURIComponent(aiCfg.models[i].id)}/list`, json('POST', {}));
+    $(`#dl-models-${i}`).innerHTML = models.map(id => `<option value="${esc(id)}">`).join('');
+    $(`#ml-${i}`).textContent = `${models.length} 個模型，點 Model ID 欄位挑選`;
+  } catch (e) { $(`#ml-${i}`).innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+}
+async function testModel(id) {
+  await saveAI('測試中…');
+  await api(`/api/admin/ai/models/${encodeURIComponent(id)}/test`, json('POST', {}));
+  aiCfg = await api('/api/ai');
+  renderAIAdmin('測試完成');
+}
+
+async function adminSet(settings) { await api('/api/admin/settings', json('PUT', settings)); }
+async function setRole(id, role) { try { await api(`/api/admin/users/${id}`, json('PUT', { role })); } catch (e) { alert(e.message); showAdmin(); } }
+async function resetPassword(id) {
+  if (!confirm('重設後對方會被登出，需用臨時密碼登入並改密碼。確定？')) return;
+  const { password } = await api(`/api/admin/users/${id}/reset-password`, json('POST', {}));
+  $(`#pw-${id}`).innerHTML = `臨時密碼（只顯示這一次）：<code>${esc(password)}</code>`;
+}
+async function revokeShare(token) {
+  await api(`/api/shares/${encodeURIComponent(token)}`, { method: 'DELETE' });
+  if (location.hash === '#admin') showAdmin(); else openShares();
+}
+
+async function refreshList() {
+  meetings = await api('/api/meetings');
+  $('#list').innerHTML = meetings.slice(0, 30).map(m =>
+    `<a href="#${m.id}" class="${m.id === current?.id ? 'on' : ''}" title="${esc(m.title)}">📄 ${esc(m.title)}</a>`).join('');
+}
+
+function stop() { clearTimeout(pollTimer); current = null; }
+// Suggestions for name, team, leader and tag inputs, so people pick existing values instead of retyping them.
+const opts = xs => xs.map(x => `<option value="${esc(x)}">`).join('');
+const datalists = () => `<datalist id="dl-people">${directory.people.map(p => `<option value="${esc(p.name)}">${esc(p.team)}</option>`).join('')}</datalist>
+  <datalist id="dl-teams">${opts(uniq(directory.people.map(p => p.team)))}</datalist><datalist id="dl-leaders">${opts(uniq(directory.people.map(p => p.leader)))}</datalist>
+  <datalist id="dl-tags">${opts(allTags())}</datalist>`;
+// Reuse an existing spelling when the typed value differs only in case or spacing ("platformteam" → "Platform team").
+const canonKey = v => String(v).normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+const canon = (v, known) => { const t = String(v ?? '').trim().replace(/\s+/g, ' '); return known.find(k => canonKey(k) === canonKey(t)) ?? t; };
+const canonList = (text, known) => String(text).split(/[,，、]/).map(x => canon(x, known)).filter(Boolean);
+function page(html, wide = false) { $('#main').innerHTML = `<div class="page${wide ? ' wide' : ''}">${html}${datalists()}</div>`; }
+
+// ---- 會議紀錄（資料庫表格） ----
+async function showDb() {
+  stop();
+  await refreshList();
+  page(`<div class="icon">📅</div><h1>會議紀錄</h1>
+    <p class="muted">每場會議的逐字稿、AI 摘要與待辦事項。</p>
+    <div class="views"><button class="view on">▦ 全部會議</button><span class="spacer"></span><button class="primary" onclick="location.hash='new'">新增</button></div>
+    <table class="db"><thead><tr><th>Aa 名稱</th><th>🕐 時間</th><th>◉ 類型</th><th>🏷 標籤</th><th>📍 地點</th><th>👥 參與者</th><th>🏢 團隊</th><th>◎ 狀態</th><th>✅ 待辦</th></tr></thead>
+    <tbody>${meetings.map(m => `<tr onclick="location.hash='${m.id}'">
+      <td class="name">${m.access === 'private' ? '🔒' : '📄'} ${esc(m.title)}${m.brief ? `<div class="muted">${esc(m.brief)}</div>` : ''}</td><td class="nowrap">${esc(whenLabel(m))}</td>
+      <td>${tag(TYPES[m.template] ?? TYPES.auto)}</td><td>${m.tags.map(tagLink).join('')}</td><td>${esc(m.location)}</td>
+      <td>${m.attendees.map(a => tag([a, 'gray'])).join('')}</td><td>${m.teams.map(teamLink).join('')}</td><td>${tag(STATUS[m.status] ?? [m.status, 'gray'])}</td>
+      <td>${m.actions.filter(a => a.done).length} / ${m.actions.length}</td></tr>`).join('')}</tbody></table>
+    <div class="db-foot"><a href="#new">＋ 新增</a>　共 ${meetings.length} 筆</div>`, true);
+}
+
+// ---- Action Items 追蹤：依會議（或團隊、負責人、Y leader）分組，可收合 ----
+const act = { status: 'open', q: '', tag: '', team: '', leader: '', group: 'meeting' }, openGroups = new Set();
+const uniq = xs => [...new Set(xs.filter(Boolean))].sort();
+
+async function showActions() {
+  stop();
+  await refreshList();
+  const all = meetings.flatMap(m => m.actions);
+  const view = (k, label) => `<button class="view ${act.status === k ? 'on' : ''}" onclick="act.status='${k}'; showActions()">${label}</button>`;
+  const pick = (label, key, values) => `<label class="muted">${label} <select onchange="act.${key} = this.value; renderActions()">
+    <option value="">全部</option>${values.map(v => `<option ${act[key] === v ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></label>`;
+  page(`<div class="icon">✅</div><h1>Action Items</h1>
+    <p class="muted">從每場會議摘要整理出的待辦事項。負責人會依「成員與團隊」名錄對應團隊與 Y leader；勾選後會同步回該場會議。</p>
+    <div class="views">${view('open', '☐ 未完成')}${view('done', '☑ 已完成')}${view('all', '▦ 全部')}<span class="spacer"></span>
+      <label class="muted">分組 <select onchange="act.group = this.value; renderActions()">${[['meeting', '會議'], ['team', '團隊'], ['owner', '負責人'], ['leader', 'Y leader'], ['none', '不分組']]
+        .map(([v, t]) => `<option value="${v}" ${act.group === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label></div>
+    <div class="filters">
+      <input class="search small" aria-label="搜尋待辦" placeholder="搜尋待辦、負責人或會議…" value="${esc(act.q)}" oninput="act.q = this.value; renderActions()">
+      ${pick('標籤', 'tag', allTags())}${pick('團隊', 'team', uniq(all.map(a => a.team)))}${pick('Y leader', 'leader', uniq(all.map(a => a.leader)))}
+      <span class="spacer"></span><button onclick="toggleAll(true)">全部展開</button><button onclick="toggleAll(false)">全部收合</button>
+    </div>
+    <div id="act-list"></div>`, true);
+  renderActions();
+}
+
+const actRows = (rows, showMeeting) => `<table class="db"><tbody>${rows.map(({ m, a, i }) => `<tr>
+  <td class="chk"><input type="checkbox" aria-label="完成：${esc(a.text)}" ${a.done ? 'checked' : ''} ${rank(m.perm) < rank('edit') ? 'disabled title="沒有編輯權限"' : ''} onchange="setDone('${m.id}', ${i}, this.checked)"></td>
+  <td class="name${a.done ? ' done' : ''}">${esc(a.text)}${a.cite ? ` <a class="cite" href="#${m.id}:seg-${a.cite}">[${a.cite}]</a>` : ''}</td>
+  <td>${tag([a.owner || '未指定', 'purple'])}${a.team ? teamLink(a.team) : ''}${a.leader ? leaderLink(a.leader) : ''}</td>
+  ${showMeeting ? `<td><a href="#${m.id}">📄 ${esc(m.title)}</a> <span class="muted nowrap">${esc(whenLabel(m))}</span></td>` : ''}</tr>`).join('')}</tbody></table>`;
+
+function renderActions() {
+  const q = act.q.trim().toLowerCase();
+  const rows = meetings.flatMap(m => m.actions.map((a, i) => ({ m, a, i }))).filter(({ m, a }) =>
+    (act.status === 'all' || (act.status === 'done') === a.done) && (!act.tag || m.tags.includes(act.tag))
+    && (!act.team || a.team === act.team) && (!act.leader || a.leader === act.leader)
+    && (!q || [a.text, a.owner, a.team, a.leader, m.title, ...m.tags].join(' ').toLowerCase().includes(q)));
+  const key = ({ m, a }) => ({ meeting: m.id, team: a.team || '（未對應團隊）', owner: a.owner || '未指定', leader: a.leader || '（沒有 Y leader）' })[act.group];
+  const groups = new Map();
+  for (const r of rows) groups.set(key(r), [...(groups.get(key(r)) ?? []), r]);
+  const label = (k, [{ m }]) => act.group === 'meeting'
+    ? `📄 <a href="#${m.id}">${esc(m.title)}</a> <span class="muted">${esc(whenLabel(m))}</span>${m.tags.map(tagLink).join('')}${m.teams.map(teamLink).join('')}
+       <span class="muted">· 完成 ${m.actions.filter(a => a.done).length} / ${m.actions.length}</span>`
+    : act.group === 'team' && !k.startsWith('（') ? teamLink(k) : act.group === 'leader' && !k.startsWith('（') ? `👔 ${leaderLink(k)}` : esc(k);
+  // Filtering is a search: open every group so matches are visible.
+  const autoOpen = q || act.tag || act.team || act.leader;
+  $('#act-list').innerHTML = !rows.length ? '<p class="muted">沒有符合的待辦事項</p>'
+    : act.group === 'none' ? actRows(rows, true)
+    : [...groups].map(([k, rs]) => `<details class="group" data-k="${esc(act.group + k)}" ${autoOpen || openGroups.has(act.group + k) ? 'open' : ''} ontoggle="toggleGroup(this)">
+        <summary>${label(k, rs)} <span class="count">${rs.length}</span></summary>${actRows(rs, act.group !== 'meeting')}</details>`).join('');
+  $('#act-list').insertAdjacentHTML('beforeend', `<div class="db-foot">共 ${rows.length} 筆，${groups.size} 組</div>`);
+}
+
+function toggleGroup(el) { openGroups[el.open ? 'add' : 'delete'](el.dataset.k); }
+function toggleAll(open) { document.querySelectorAll('#act-list details').forEach(d => { d.open = open; }); }
+
+async function setDone(id, i, done) {
+  const m = current?.id === id ? current : meetings.find(x => x.id === id);
+  const updated = await api(`/api/meetings/${id}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ actions: m.actions.map((a, k) => k === i ? { ...a, done } : a) }),
+  });
+  if (current?.id === id) { current = updated; render(current); refreshList(); }
+  else if ($('#act-list')) { await refreshList(); renderActions(); }
+}
+
+// ---- 成員與團隊 ----
+let directory = { people: [], csv: '' };
+async function loadDir() { directory = await api('/api/directory'); }
+
+async function showPeople() {
+  stop();
+  await Promise.all([refreshList(), loadDir()]);
+  const teams = new Map();
+  for (const p of directory.people) teams.set(p.team || '（未分組）', [...(teams.get(p.team || '（未分組）') ?? []), p]);
+  const actions = meetings.flatMap(m => m.actions);
+  page(`<div class="icon">👥</div><h1>成員與團隊</h1>
+    <p class="muted">講者名字和待辦負責人會對應到這裡的成員，帶出團隊與 Y leader；負責人直接寫團隊名，或文字裡提到團隊、成員，也會對應。名錄只存在本機 <code>data/directory.json</code>，不會進 git。</p>
+    <table class="db"><thead><tr><th>🏢 團隊</th><th>👔 Y leader</th><th>👥 成員</th><th>📄 會議</th><th>☐ 未完成待辦</th></tr></thead>
+    <tbody>${[...teams].map(([t, ps]) => `<tr>
+      <td>${t.startsWith('（') ? esc(t) : teamLink(t)}</td><td>${uniq(ps.map(p => p.leader)).map(leaderLink).join('')}</td>
+      <td>${ps.map(p => `<span class="tag gray" title="${esc(p.aliases.join(' / '))}">${esc(p.name)}</span>`).join('')}</td>
+      <td>${meetings.filter(m => m.teams.includes(t)).length}</td><td>${actions.filter(a => a.team === t && !a.done).length}</td></tr>`).join('')
+      || '<tr><td colspan="5" class="muted">還沒有名錄，請在下方貼上</td></tr>'}</tbody></table>
+    ${(() => {
+      const groups = new Map();
+      for (const p of directory.people) for (const g of p.groups ?? []) groups.set(g, [...(groups.get(g) ?? []), p]);
+      return groups.size ? `<h2 class="h2">🤝 常合作群組</h2><table class="db"><thead><tr><th>群組</th><th>成員</th><th>📄 會議</th></tr></thead><tbody>
+        ${[...groups].map(([g, ps]) => `<tr><td>${qLink('group', g, tagColor(g), '🤝 ')}</td><td>${ps.map(p => tag([p.team ? `${p.name} · ${p.team}` : p.name, 'gray'])).join('')}</td>
+          <td>${meetings.filter(m => m.groups?.includes(g)).length}</td></tr>`).join('')}</tbody></table>` : '';
+    })()}
+    <p class="muted">每個人可以在「⚙️ 個人設定」維護自己的團隊、Y leader、團隊成員與常合作群組，會和下方名錄合併。</p>
+    <h2 class="h2">編輯名錄</h2>
+    <p class="muted">一行一位：<code>姓名, 團隊, Y leader, 別名</code>，多個別名用 <code>/</code> 分隔。可以直接從試算表貼上（逗號或 Tab 分隔），第一行若是標題列會略過。</p>
+    <textarea id="dircsv" class="csv" rows="12" aria-label="名錄" placeholder="小美, Platform team, Ken, Mei/May&#10;阿凱, SPC, Amy&#10;Rex, Data team, Ken">${esc(directory.csv)}</textarea>
+    ${me.role === 'admin' ? '<div class="row"><button class="primary" onclick="saveDir()">儲存名錄</button> <span id="dirmsg" class="muted"></span></div>' : '<p class="muted">只有管理員能修改名錄。</p>'}`, true);
+  if (me.role !== 'admin') $('#dircsv').readOnly = true;
+}
+
+async function saveDir() {
+  try {
+    directory = await api('/api/directory', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ csv: $('#dircsv').value }) });
+    await showPeople();
+    $('#dirmsg').textContent = `已儲存 ${directory.people.length} 位成員`;
+  } catch (e) { $('#dirmsg').innerHTML = `<span class="err">儲存失敗：${esc(e.message)}</span>`; }
+}
+
+// ---- 新會議 ----
+function addNewTag(i) {
+  const t = allTags()[i], cur = $('#tags').value.split(/[,，、]/).map(x => x.trim()).filter(Boolean);
+  if (!cur.includes(t)) $('#tags').value = [...cur, t].join(', ');
+}
+
+async function showNew() {
+  stop();
+  await refreshList();
+  if (me.role === 'readonly') return page('<p class="muted">唯讀帳號不能建立會議。</p>');
+  page(`<div class="crumb"><a href="#">會議紀錄</a> / 新會議</div>
+    <div class="icon">🎙️</div><h1><input id="title" placeholder="無標題會議" aria-label="會議標題"></h1>
+    <div class="props">
+      ${prop('🕐', '時間', `<input type="datetime-local" id="when" aria-label="會議時間" value="${localInput(new Date())}">`)}
+      ${prop('📍', '地點', `<input id="location" aria-label="地點" placeholder="會議室或線上連結">`)}
+      ${prop('📝', '摘要', `<input id="brief" aria-label="摘要" placeholder="一句話說明這場會議">`)}
+      ${prop('🏷', '標籤', `<input id="tags" aria-label="標籤" placeholder="用逗號分隔，或點下方既有標籤">
+        <div>${allTags().map((t, i) => `<button class="tag ${tagColor(t)}" onclick="addNewTag(${i})" title="加入標籤">＋ ${esc(t)}</button>`).join('')}</div>`)}
+      ${prop('🤖', 'Agent', `<select id="agent" aria-label="Agent">${aiCfg.agents.filter(a => a.enabled !== false).map(a => `<option value="${a.id}" title="${esc(a.description)}">${esc(a.name)}</option>`).join('')}</select>`)}
+      ${prop('🌐', '轉錄語言', `<select id="lang" aria-label="轉錄語言">${LANGS.map(([v, t]) => `<option value="${v}">${t}</option>`).join('')}</select>`)}
+      ${prop('📖', '術語', `<textarea id="glossary" rows="2" aria-label="術語" placeholder="這場會議會出現的專有名詞，用逗號或換行分隔，例如 Karpenter, IRSA, PgBouncer, 二代健保"></textarea>`)}
+    </div>
+    <div class="ai-block">
+      <div class="ai-head">🎙️ AI 會議筆記</div>
+      <div class="ai-start">
+        <button id="recBtn" class="primary" onclick="toggleRec()">● 開始轉錄</button>
+        <span id="recTime" class="muted"></span><span class="spacer"></span>
+        <button onclick="$('#file').click()">⤒ 上傳音訊或影片</button>
+        <input type="file" id="file" hidden accept="audio/*,video/*,.mp4,.m4a,.mp3,.wav,.webm,.mov,.aac,.ogg,.flac" onchange="uploadFile()">
+      </div>
+      <label class="muted"><input type="checkbox" id="capOn" ${localStorage.getItem('captions') === '1' ? 'checked' : ''} onchange="localStorage.setItem('captions', this.checked ? '1' : '0')">
+        即時字幕預覽：只用瀏覽器的本機語音辨識；瀏覽器不能在本機辨識時就不顯示，音訊不會送到雲端</label>
+      <div id="live" aria-live="polite"><i>即時字幕預設關閉。停止錄音後，會產生含講者標籤的正式逐字稿與摘要。</i></div>
+      <p id="msg" class="muted"></p>
+    </div>`);
+  if (!window.MediaRecorder) $('#recBtn').disabled = true;
+}
+
+async function upload(blob, filename) {
+  $('#msg').textContent = '上傳中…';
+  const q = new URLSearchParams({ filename, lang: $('#lang').value, title: $('#title').value || filename, glossary: $('#glossary').value,
+    scheduledAt: $('#when').value, location: $('#location').value, brief: $('#brief').value, tags: canonList($('#tags').value, allTags()), agentId: $('#agent').value });
+  try {
+    const m = await api(`/api/meetings?${q}`, { method: 'POST', headers: { 'Content-Type': blob.type || 'application/octet-stream' }, body: blob });
+    location.hash = m.id;
+  } catch (e) {
+    $('#msg').innerHTML = `<span class="err">上傳失敗：${esc(e.message)}</span>`;
+  }
+}
+
+function uploadFile() {
+  const f = $('#file').files[0];
+  if (f) upload(f, f.name);
+}
+
+// ---- 錄音 + 即時字幕 ----
+let rec, recog, recStart, tick;
+async function toggleRec() {
+  if (rec?.state === 'recording') return rec.stop();
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch (e) { return $('#msg').innerHTML = `<span class="err">無法使用麥克風：${esc(e.message)}</span>`; }
+  const chunks = [];
+  rec = new MediaRecorder(stream);
+  rec.ondataavailable = e => chunks.push(e.data);
+  rec.onstop = () => {
+    stream.getTracks().forEach(t => t.stop());
+    recog?.stop(); recog = null; clearInterval(tick);
+    $('#recBtn').textContent = '● 開始轉錄'; $('#recBtn').classList.replace('rec', 'primary');
+    const type = rec.mimeType || 'audio/webm';
+    const ext = type.includes('mp4') ? 'm4a' : type.includes('ogg') ? 'ogg' : 'webm';
+    upload(new Blob(chunks, { type }), `recording-${new Date().toISOString().replace(/[:.]/g, '-')}.${ext}`);
+  };
+  // shortcut: chunks live only in memory until stop; a tab crash loses the recording. Upload chunks incrementally if meetings run long.
+  rec.start(1000);
+  recStart = Date.now();
+  tick = setInterval(() => $('#recTime').textContent = fmt((Date.now() - recStart) / 1000), 500);
+  $('#recBtn').textContent = '■ 停止並產生筆記'; $('#recBtn').classList.replace('primary', 'rec');
+  startCaptions();
+}
+
+// Live captions are opt-in and on-device only (D-019): Chrome's default recognition sends audio to a cloud
+// service, which the ZDR boundary (D-008) rules out. Never fall back to remote recognition.
+async function startCaptions() {
+  if (!$('#capOn')?.checked) return;
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const lang = $('#lang').value === 'auto' ? navigator.language : $('#lang').value;
+  const opts = { langs: [lang], processLocally: true };
+  let status = 'unavailable';
+  try { if (SR?.available) status = await SR.available(opts); } catch {}
+  if (status === 'downloadable' || status === 'downloading') {
+    $('#live').innerHTML = '<i>正在下載本機語言包，完成後開始顯示字幕…</i>';
+    status = await SR.install(opts).catch(() => false) ? 'available' : 'unavailable';
+  }
+  if (status !== 'available') return $('#live').innerHTML = '<i>這個瀏覽器無法在本機辨識這個語言，所以不顯示即時字幕（不會改用雲端）。錄音仍會正常轉錄。</i>';
+  if (rec?.state !== 'recording') return; // stopped while the language pack downloaded
+  $('#live').innerHTML = '<i>本機辨識中…（僅供預覽）</i>';
+  let finalText = '';
+  recog = new SR();
+  recog.processLocally = true;
+  recog.lang = lang;
+  recog.continuous = true;
+  recog.interimResults = true;
+  recog.onresult = e => {
+    let interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      if (e.results[i].isFinal) finalText += e.results[i][0].transcript + '\n';
+      else interim += e.results[i][0].transcript;
+    }
+    $('#live').innerHTML = esc(finalText) + `<i>${esc(interim)}</i>`;
+    $('#live').scrollTop = $('#live').scrollHeight;
+  };
+  // Chrome ends recognition after silence; restart while still recording.
+  recog.onend = () => { if (rec?.state === 'recording' && recog) recog.start(); };
+  recog.start();
+}
+
+// ---- 會議頁 ----
+const cites = line => line.replace(/\[(\d+(?:\s*[,，、-]\s*\d+)*)\]/g, (_, ns) => ns.split(/[,，、]/).map(n => n.trim().split('-')[0])
+  .map(n => `<a class="cite" href="#seg-${n}" onclick="return seek(${n})">[${n}]</a>`).join(''));
+
+const todo = (m, a, i, html, extra = '') => `<label class="todo ${a?.done ? 'done' : ''}"><input type="checkbox" ${a?.done ? 'checked' : ''} ${a ? '' : 'disabled'}
+  onchange="setDone('${m.id}', ${i}, this.checked)"><span>${html}</span>${extra}</label>`;
+
+// Checkbox lines are the action items, in the same order the server parsed them.
+function renderSummary(m) {
+  let k = 0;
+  return esc(m.summary).split('\n').map(line => {
+    line = cites(line.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>'));
+    if (/^#{1,6} /.test(line)) return `<h3>${line.replace(/^#+ /, '')}</h3>`;
+    if (/^\s*[-*] \[[ xX]\] /.test(line)) { const i = k++; return todo(m, m.actions[i], i, line.replace(/^\s*[-*] \[[ xX]\] /, '')); }
+    if (/^\s*([-*]|\d+\.) /.test(line)) return `<ul><li>${line.replace(/^\s*([-*]|\d+\.) /, '')}</li></ul>`;
+    return line ? `<p>${line}</p>` : '';
+  }).join('');
+}
+
+function seek(n) {
+  const s = current?.segments[n - 1];
+  if (!s) return false;
+  $('#audio').currentTime = s.start;
+  if (tab !== 'transcript') { tab = 'transcript'; render(current); }
+  document.querySelectorAll('.seg.hl').forEach(el => el.classList.remove('hl'));
+  const el = document.getElementById(`seg-${n}`);
+  el.classList.add('hl'); el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  return false;
+}
+
+function setTab(t) { tab = t; render(current); }
+
+async function openMeeting(id) {
+  clearTimeout(pollTimer);
+  const same = current?.id === id;
+  if (!same) { tab = 'summary'; showRaw = false; activeSeg = 0; }
+  const m = await api(`/api/meetings/${id}`);
+  current = m;
+  // Polling must not wipe text the user is typing (title, notes, glossary).
+  if (!same || !document.activeElement?.matches('main textarea, main input:not([type=checkbox])')) render(m);
+  refreshList();
+  if (BUSY.includes(m.status)) pollTimer = setTimeout(() => openMeeting(id), 2000);
+}
+
+function render(m) {
+  pick = null; // a re-render drops the range picker
+  const busy = BUSY.includes(m.status);
+  // Keep the same <audio> element across re-renders so playback isn't interrupted.
+  const keepAudio = $('#audio')?.dataset.id === m.id && $('#audio');
+  const speakerIds = [...new Set(m.segments.map(s => s.speaker))].sort((a, b) => a - b);
+  const langLabel = (LANGS.find(([v]) => v === m.lang) ?? [, m.lang])[1];
+  const canEdit = rank(m.perm) >= rank('edit');
+  const staleNote = m.summaryStale && !busy ? `<p class="notice">講者或參與者改過了，摘要與 Action Items 還是舊的名字。
+    ${canEdit ? '<button onclick="resummarize()">↻ 重新產生摘要</button>' : ''}</p>` : '';
+  const spkOpts = (cur, extra = '') => speakerIds.filter(x => x !== cur).map(x => `<option value="${x}">${esc(spk(m, x))}</option>`).join('') + extra;
+  const bodies = {
+    summary: busy && !m.summary ? `<p class="muted">⏳ ${STATUS[m.status][0]}…</p>`
+      : `${staleNote}<div class="summary">${renderSummary(m) || '<p class="muted">尚無摘要</p>'}</div>`,
+    notes: `<textarea class="notes" placeholder="在這裡記筆記…重新產生摘要時會一併參考" aria-label="我的筆記" onchange="patch({ notes: this.value })">${esc(m.notes)}</textarea>`,
+    transcript: !m.segments.length ? `<p class="muted">${busy ? `⏳ ${STATUS[m.status][0]}…` : '沒有逐字稿'}</p>` : `
+      <div class="speakers">${speakerIds.map(s => `<label style="color:${COLORS[s % COLORS.length]}">${esc(`Speaker ${s < 26 ? String.fromCharCode(65 + s) : s + 1}`)}
+        <input type="text" list="dl-people" value="${esc(m.speakers[s] ?? '')}" placeholder="輸入姓名" onchange="renameSpeaker(${s}, this.value)">${speakerIds.length > 1
+          ? `<select aria-label="把 ${esc(spk(m, s))} 的所有段落併入另一位講者" onchange="mergeSpeaker(${s}, +this.value)"><option value="">併入…</option>${spkOpts(s)}</select>` : ''}</label>`).join('')}</div>
+      ${hintsHtml(m, canEdit)}
+      ${canEdit ? '<p class="muted">講者分錯時，點段落前的名字改成別人，Shift＋點另一段的名字可以一次改一整段範圍；整個講者是同一人時用「併入…」。</p>' : ''}
+      ${canEdit ? `<div class="learn-row"><input aria-label="加入團隊術語" placeholder="＋ 加入團隊術語（例如聽錯的專有名詞），下次轉錄起生效" onchange="addTeamTerm(this)"><span id="term-msg" class="muted"></span></div>` : ''}
+      ${m.perm === 'owner' ? `<div class="learn-row">${m.benchmarkAt
+        ? `📌 已凍結為 benchmark（${dt(m.benchmarkAt)}）<button class="ghost" onclick="setBenchmark(false)">取消凍結</button>`
+        : '<button class="ghost" onclick="setBenchmark(true)" title="講者與文字校正完成後凍結，當作準確率的標準答案">📌 凍結為 benchmark</button>'}</div>` : ''}
+      ${m.segments.some(s => s.raw && s.raw !== s.text) ? `<label class="muted"><input type="checkbox" data-keep ${showRaw ? 'checked' : ''} onchange="showRaw = this.checked; render(current)"> 顯示原始辨識結果（未轉繁體、未校對）</label>` : ''}
+      ${m.segments.map((s, i) => `<div class="seg" id="seg-${i + 1}"><time onclick="seek(${i + 1})">${fmt(s.start)}</time>
+        <b style="color:${COLORS[s.speaker % COLORS.length]}" ${canEdit ? `class="pick" title="點一下改講者；Shift＋點另一段選範圍" onclick="pickSpeaker(${i}, event)"` : ''}>${esc(spk(m, s.speaker))}</b><span>${esc(showRaw ? s.raw ?? s.text : s.text).replaceAll('【?】', '<mark title="辨識不確定，請對照錄音">【?】</mark>')}</span></div>`).join('')}`,
+  };
+  page(`<div class="crumb"><a href="#">會議紀錄</a> / ${esc(m.title)}</div>
+    <div class="icon">🎙️</div>
+    <h1><input id="mtitle" value="${esc(m.title)}" aria-label="會議標題" onchange="patch({ title: this.value })"></h1>
+    <div class="props">
+      ${prop('🕐', '時間', `<input type="datetime-local" aria-label="會議時間" value="${m.scheduledAt || localInput(m.createdAt)}" onchange="patch({ scheduledAt: this.value })">`)}
+      ${prop('📍', '地點', `<input aria-label="地點" placeholder="空白" value="${esc(m.location)}" onchange="patch({ location: this.value })">`)}
+      ${prop('📝', '摘要', `<input aria-label="摘要" placeholder="一句話說明這場會議" value="${esc(m.brief)}" onchange="patch({ brief: this.value })">`)}
+      ${prop('🏷', '標籤', m.tags.map((t, i) => tagLink(t).replace('</a>', `</a><button class="tag-x" aria-label="移除標籤 ${esc(t)}" onclick="setTags(current.tags.filter((_, k) => k !== ${i}))">×</button>`)).join('')
+        + `<input class="tag-add" list="dl-tags" aria-label="新增標籤" placeholder="＋ 新增標籤" onchange="setTags([...current.tags, canon(this.value, allTags())])">`)}
+      ${prop('🤖', 'Agent', `<select aria-label="Agent" onchange="patch({ agentId: this.value })">${aiCfg.agents.filter(a => a.enabled !== false || a.id === m.agentId)
+        .map(a => `<option value="${a.id}" ${(m.agentId || 'general') === a.id ? 'selected' : ''} title="${esc(a.description)}">${esc(a.name)}</option>`).join('')}</select>
+        <span class="muted">換了 Agent 後按「重新產生摘要」套用</span>`)}
+      ${prop('◉', '類型', tag(TYPES[m.template] ?? TYPES.auto))}
+      ${prop('◎', '狀態', tag(STATUS[m.status] ?? [m.status, 'gray']) + (m.error ? ` <span class="err">${esc(m.error)}</span>` : ''))}
+      ${prop('👥', '參與者', m.people.map(p => `<span class="tag gray" title="${esc(p.leader ? `Y leader：${p.leader}` : '')}">${esc(p.name)}${p.team ? ` · ${esc(p.team)}` : ''}</span>`
+        + (m.participants.includes(p.name) ? `<button class="tag-x" aria-label="移除參與者 ${esc(p.name)}" onclick="setParticipants(current.participants.filter((_, k) => k !== ${m.participants.indexOf(p.name)}))">×</button>` : '')).join('')
+        + `<input class="tag-add" list="dl-people" aria-label="新增參與者" placeholder="＋ 新增參與者" onchange="setParticipants([...current.participants, canon(this.value, directory.people.map(p => p.name))])">`)}
+      ${prop('🏢', '團隊', [...m.teams.map(teamLink), ...uniq(m.people.map(p => p.leader)).map(leaderLink)].join('') || '<span class="muted">講者改成名錄裡的名字後會自動帶出</span>')}
+      ${prop('🌐', '語言', esc(langLabel) + (m.language ? ` <span class="muted">· 偵測為 ${esc(m.language)}</span>` : ''))}
+      ${prop('📖', '術語', `<textarea rows="1" aria-label="術語" placeholder="空白" onchange="patch({ glossary: this.value })">${esc(m.glossary)}</textarea>`
+        + (teamTerms.length ? `<span class="muted" title="${esc(teamTerms.join('、'))}">轉錄時另外套用 ${teamTerms.length} 個團隊術語（這裡的術語也會加入團隊術語）</span>` : ''))}
+      ${prop('📎', '錄音', `<a href="/api/meetings/${m.id}/audio?download" download>${esc(m.originalName)}</a>`)}
+      ${prop('📊', 'AI 用量', (m.usage ?? []).length ? `${usageLine(totalOf(m.usage))}<details><summary class="muted">每次呼叫明細</summary>${usageRows([...m.usage].reverse())}</details>` : '<span class="muted">尚無紀錄</span>')}
+      ${prop('🔒', '權限', m.perm === 'owner'
+        ? `<select aria-label="其他人的權限" data-keep onchange="patch({ access: this.value })">${ACCESS.map(([v, t]) => `<option value="${v}" ${m.access === v ? 'selected' : ''}>${t}</option>`).join('')}</select>
+           <button class="ghost" data-keep onclick="openShares()">🔗 分享連結</button><div id="sharePanel"></div>`
+        : `你的權限：${tag([PERMS[m.perm], 'blue'])}`)}
+    </div>
+    <div class="ai-block">
+      <div class="ai-head">🎙️ AI 會議筆記<span class="muted">${day(m.createdAt)}</span><span class="spacer"></span>
+        <button class="ghost" onclick="resummarize(true)" ${busy ? 'disabled' : ''} title="用目前的術語重新轉錄，講者姓名會保留">↻ 重新轉錄</button></div>
+      <div id="audioSlot"></div>
+      <div class="player">
+        <button onclick="skip(-10)" aria-label="倒退 10 秒">↺ 10 秒</button>
+        <button onclick="skip(10)" aria-label="快轉 10 秒">10 秒 ↻</button>
+        <span class="spacer"></span><span class="muted">速度</span>
+        ${[1, 1.2, 1.5, 2].map(r => `<button class="rate ${rate === r ? 'on' : ''}" data-r="${r}" aria-pressed="${rate === r}" onclick="setRate(${r})">${r}×</button>`).join('')}
+      </div>
+      <div class="tabs" role="tablist">${[['summary', '摘要'], ['notes', '筆記'], ['transcript', '逐字稿']].map(([k, t]) =>
+        `<button class="tab ${tab === k ? 'on' : ''}" role="tab" aria-selected="${tab === k}" onclick="setTab('${k}')">${t}</button>`).join('')}</div>
+      ${bodies[tab]}
+      ${tab === 'summary' ? `<div class="ai-foot">
+        <label class="muted">指示 <select id="tpl">${Object.entries(TYPES).map(([v, [t]]) => `<option value="${v}" ${m.template === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+        <label class="muted">語言 <select id="outLang">${[['', '與逐字稿相同'], ['繁體中文（台灣）', '繁體中文'], ['English', 'English'], ['日本語', '日本語'], ['简体中文', '简体中文'], ['한국어', '한국어']]
+          .map(([v, t]) => `<option value="${esc(v)}" ${m.outputLang === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+        <span class="spacer"></span>
+        <button onclick="resummarize()" ${busy ? 'disabled' : ''}>${m.segments.length ? '↻ 重新產生摘要' : '↻ 重新轉錄並摘要'}</button>
+        ${m.summaryBy ? `<span class="muted" style="width:100%">由 ${esc(m.summaryBy.agent)} · ${esc(m.summaryBy.model)}（effort ${esc(m.summaryBy.effort)}）產生</span>` : ''}
+        <details ${m.instructions ? 'open' : ''}><summary class="muted">自訂指示</summary>
+          <textarea id="instr" placeholder="例如：列出所有提到的數字與截止日">${esc(m.instructions)}</textarea></details>
+      </div>` : ''}
+    </div>
+    <h2 class="h2">✅ Action Items</h2>
+    ${staleNote}${m.actions.map((a, i) => todo(m, a, i, esc(a.text), tag([a.owner || '未指定', 'purple']) + (a.team ? teamLink(a.team) : '') + (a.cite ? cites(`[${a.cite}]`) : ''))).join('')
+      || '<p class="muted">摘要產生後，待辦事項會出現在這裡。</p>'}
+    <p class="muted"><a href="#actions">在 Action Items 追蹤所有會議的待辦 →</a></p>
+    <h2 class="h2">💬 留言</h2>
+    ${(m.comments ?? []).map(c => `<div class="comment"><b>${esc(c.name)}</b> <span class="muted">${dt(c.createdAt)}
+      ${c.seg ? `· <a href="#${m.id}:seg-${c.seg}" onclick="return seek(${c.seg})">逐字稿第 ${c.seg} 段</a>` : ''}</span>
+      ${c.userId === me.id || m.perm === 'owner' ? `<button class="ghost" data-keep onclick="delComment('${c.id}')">刪除</button>` : ''}<div>${esc(c.text)}</div></div>`).join('')
+      || '<p class="muted">還沒有留言</p>'}
+    ${rank(m.perm) >= rank('comment') ? `<textarea id="cmt" data-keep aria-label="留言" placeholder="留言…"></textarea>
+      <div class="row"><button data-keep onclick="addComment()">送出留言</button>
+      <label class="muted"><input type="checkbox" id="cmtseg" data-keep> 附上目前播放到的逐字稿段落</label></div>` : ''}`);
+  // Below edit permission, lock every editing control; viewing, playback and (if allowed) commenting stay usable.
+  if (rank(m.perm) < rank('edit')) {
+    document.querySelectorAll('main input, main textarea, main select').forEach(el => { if (!el.matches('[data-keep]')) el.disabled = true; });
+    document.querySelectorAll('main .tag-x, main .tag-add, .ai-head .ghost, .ai-foot button, .speakers select').forEach(el => { el.hidden = true; });
+  }
+  const audio = keepAudio || Object.assign(document.createElement('audio'), { id: 'audio', controls: true, preload: 'metadata', src: `/api/meetings/${m.id}/audio` });
+  if (!keepAudio) {
+    audio.defaultPlaybackRate = audio.playbackRate = rate; // defaultPlaybackRate survives the media load reset
+    audio.addEventListener('timeupdate', syncTranscript);
+  }
+  audio.dataset.id = m.id;
+  $('#audioSlot').append(audio);
+  syncTranscript();
+}
+
+function setRate(r) {
+  rate = r;
+  localStorage.setItem('rate', r);
+  Object.assign($('#audio'), { defaultPlaybackRate: r, playbackRate: r });
+  document.querySelectorAll('.player .rate').forEach(b => { b.classList.toggle('on', +b.dataset.r === r); b.setAttribute('aria-pressed', +b.dataset.r === r); });
+}
+
+function skip(sec) {
+  const a = $('#audio');
+  a.currentTime = Math.max(0, Math.min(a.duration || Infinity, a.currentTime + sec));
+}
+
+// Highlight the segment being played; scroll it into view only when playback moves to a new one.
+function syncTranscript() {
+  const a = $('#audio'), segs = current?.segments ?? [];
+  if (!a || (a.paused && !a.currentTime)) return;
+  let i = 0;
+  while (i < segs.length && segs[i].start <= a.currentTime) i++;
+  const el = i ? document.getElementById(`seg-${i}`) : null, prev = document.querySelector('.seg.active');
+  if (el === prev) return;
+  prev?.classList.remove('active');
+  el?.classList.add('active');
+  if (el && i !== activeSeg) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  activeSeg = i;
+}
+
+async function addComment() {
+  const text = $('#cmt').value.trim();
+  if (!text) return;
+  current = await api(`/api/meetings/${current.id}/comments`, json('POST', { text, seg: $('#cmtseg').checked && activeSeg ? activeSeg : null }));
+  render(current);
+}
+
+async function delComment(cid) {
+  current = await api(`/api/meetings/${current.id}/comments?id=${encodeURIComponent(cid)}`, { method: 'DELETE' });
+  render(current);
+}
+
+async function openShares() {
+  const shares = await api(`/api/meetings/${current.id}/shares`);
+  const link = s => `${location.origin}/#share/${s.token}`;
+  $('#sharePanel').innerHTML = `<div class="share-row">建立連結：${['view', 'comment', 'edit'].map(p => `<button data-keep onclick="createShare('${p}')">${PERMS[p]}</button>`).join('')}
+    <span class="muted">對方需登入，開啟後取得該權限</span></div>`
+    + shares.map(s => `<div class="share-row">${tag([PERMS[s.perm], 'blue'])}<input readonly data-keep value="${esc(link(s))}" onclick="this.select()" aria-label="分享連結">
+      <span class="muted">使用 ${s.uses ?? 0} 次</span>${s.revokedAt ? tag(['已撤銷', 'gray']) : `<button data-keep onclick="revokeShare('${s.token}')">撤銷</button>`}</div>`).join('');
+}
+
+async function createShare(perm) {
+  const s = await api(`/api/meetings/${current.id}/shares`, json('POST', { perm }));
+  await navigator.clipboard?.writeText(`${location.origin}/#share/${s.token}`).catch(() => {});
+  openShares();
+}
+
+async function patch(body) {
+  current = await api(`/api/meetings/${current.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  refreshList();
+}
+
+async function setTags(tags) {
+  await patch({ tags });
+  render(current);
+}
+
+async function loadTeamTerms() { teamTerms = (await api('/api/learned')).terms.filter(t => t.enabled !== false).map(t => t.term); }
+
+// Speaker-name suggestions from name cues (learning loop P2); nothing changes until the user applies one.
+function hintsHtml(m, canEdit) {
+  const open = (m.speakerHints ?? []).filter(h => m.segments.some(s => s.speaker === h.speaker) && m.speakers?.[h.speaker] !== h.name);
+  if (!open.length) return '';
+  return `<div class="hints"><span class="muted">💡 講者建議：</span>${open.map(h => `<span class="tag yellow" title="${esc(h.reason)}">${esc(`Speaker ${h.speaker < 26 ? String.fromCharCode(65 + h.speaker) : h.speaker + 1}`)} = ${esc(h.name)}
+    ${h.evidence.map(n => `<a href="#${m.id}:seg-${n}" onclick="return seek(${n})">[${n}]</a>`).join('')}</span>
+    ${canEdit ? `<button class="ghost" onclick="renameSpeaker(${h.speaker}, ${esc(JSON.stringify(h.name))})">套用</button>` : ''}`).join('')}</div>`;
+}
+
+async function addTeamTerm(input) {
+  try {
+    const { terms } = await api('/api/learned/terms', json('POST', { term: input.value }));
+    input.value = '';
+    $('#term-msg').textContent = `已加入：${terms.join('、')}`;
+    loadTeamTerms();
+  } catch (e) { $('#term-msg').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+}
+
+async function setBenchmark(on) {
+  try { current = await api(`/api/meetings/${current.id}/benchmark`, json(on ? 'POST' : 'DELETE', {})); render(current); }
+  catch (e) { alert(e.message); }
+}
+
+async function renameSpeaker(s, name) {
+  await patch({ speakers: { ...current.speakers, [s]: name.trim() || undefined } });
+  render(current);
+}
+
+async function setParticipants(names) {
+  await patch({ participants: names });
+  render(current);
+}
+
+// Reassign a range of segments (click a name; Shift-click another name or type the end to widen it) to an existing speaker,
+// a participant who hasn't spoken yet, or someone new.
+function pickSpeaker(i, ev) {
+  pick = pick && ev?.shiftKey ? { ...pick, to: i } : { from: i, to: i };
+  showPick();
+}
+function showPick() {
+  document.querySelector('.range-pick')?.remove();
+  const m = current, n = m.segments.length, lo = Math.min(pick.from, pick.to), hi = Math.max(pick.from, pick.to);
+  document.querySelectorAll('.seg').forEach((el, k) => el.classList.toggle('in-range', k >= lo && k <= hi));
+  const ids = [...new Set(m.segments.map(s => s.speaker))].sort((a, b) => a - b), spoken = ids.map(x => spk(m, x));
+  const fresh = uniq([...m.participants, ...directory.people.map(p => p.name)]).filter(x => !spoken.includes(x));
+  const box = Object.assign(document.createElement('div'), { className: 'range-pick', innerHTML: `改成
+    <select aria-label="改成哪位講者"><option value="">選擇講者…</option>${ids.map(x => `<option value="${x}">${esc(spk(m, x))}</option>`).join('')}
+      ${fresh.map(x => `<option value="n:${esc(x)}">${esc(x)}（新講者）</option>`).join('')}<option value="new">＋ 其他人…</option></select>
+    第 <input type="number" aria-label="從第幾段" min="1" max="${n}" value="${lo + 1}"> 到 <input type="number" aria-label="到第幾段" min="1" max="${n}" value="${hi + 1}"> 段
+    <button class="primary">套用</button><button class="ghost">取消</button><span class="muted">Shift＋點另一段的名字可以選範圍</span>` });
+  const [from, to] = box.querySelectorAll('input'), [ok, cancel] = box.querySelectorAll('button');
+  const clamp = v => Math.max(0, Math.min(n - 1, (+v || 1) - 1));
+  from.onchange = to.onchange = () => { pick = { from: clamp(from.value), to: clamp(to.value) }; showPick(); };
+  cancel.onclick = () => { pick = null; render(current); };
+  ok.onclick = async () => {
+    let target = box.querySelector('select').value, speakers;
+    if (!target) return box.querySelector('select').focus();
+    if (target === 'new' || target.startsWith('n:')) {
+      const name = target === 'new' ? prompt('講者姓名') : target.slice(2);
+      if (!name?.trim()) return;
+      target = Math.max(...ids) + 1;
+      speakers = { ...m.speakers, [target]: canon(name, directory.people.map(p => p.name)) };
+    }
+    await patch({ segSpeakers: Object.fromEntries(Array.from({ length: hi - lo + 1 }, (_, k) => [lo + k, +target])), ...(speakers && { speakers }) });
+    pick = null;
+    render(current);
+  };
+  document.getElementById(`seg-${hi + 1}`).after(box);
+  box.querySelector('select').focus();
+}
+
+async function mergeSpeaker(from, to) {
+  if (!Number.isInteger(to)) return;
+  await patch({ segSpeakers: Object.fromEntries(current.segments.map((s, i) => [i, s.speaker]).filter(([, s]) => s === from).map(([i]) => [i, to])) });
+  render(current);
+}
+
+async function resummarize(retranscribe = false) {
+  try {
+    await api(`/api/meetings/${current.id}/summarize`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ template: $('#tpl')?.value ?? current.template, outputLang: $('#outLang')?.value ?? current.outputLang, agentId: current.agentId,
+        instructions: $('#instr')?.value ?? current.instructions, retranscribe }),
+    });
+  } catch (e) { alert(e.message); }
+  openMeeting(current.id);
+}
+
+// ---- 搜尋 ----
+async function showSearch(q) {
+  stop();
+  await refreshList();
+  searchQ = q;
+  page(`<div class="icon">🔍</div><h1>搜尋</h1>
+    <input id="q" class="search" aria-label="搜尋" value="${esc(q)}" placeholder="搜尋標題、標籤、摘要、筆記、待辦、逐字稿…" oninput="onSearch(this.value)">
+    <p class="muted">多個關鍵字要全部符合；簡體、繁體都找得到。篩選：<code>tag:平台</code> <code>who:小美</code> <code>team:SPC</code> <code>leader:Ken</code> <code>group:ZTSA</code> <code>type:站立</code>
+      <code>after:2026-10-01</code> <code>before:2026-10-31</code> <code>"完整片語"</code></p>
+    <div>${allTags().map((t, i) => `<button class="tag ${tagColor(t)}" onclick="addFilter(${i})">${esc(t)}</button>`).join('')}</div>
+    <div id="results"></div>`);
+  $('#q').focus();
+  $('#q').setSelectionRange(q.length, q.length);
+  runSearch(q);
+}
+
+function addFilter(i) {
+  const t = allTags()[i];
+  $('#q').value = `${searchQ} ${/\s/.test(t) ? `tag:"${t}"` : `tag:${t}`}`.trim();
+  onSearch($('#q').value);
+}
+
+function onSearch(q) {
+  searchQ = q;
+  history.replaceState(null, '', `#search=${encodeURIComponent(q)}`); // keep the query in the URL without re-routing
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => runSearch(q), 200);
+}
+
+async function runSearch(q) {
+  const r = await api(`/api/search?q=${encodeURIComponent(q)}`);
+  if (q !== searchQ || !$('#results')) return; // a newer query or another page took over
+  const re = r.terms.length && new RegExp(r.terms.map(t => esc(t).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'gi');
+  const hl = s => re ? esc(s).replace(re, '<mark>$&</mark>') : esc(s);
+  const link = (id, h) => `#${id}${h.seg ? `:seg-${h.seg}` : h.field === 'notes' ? ':notes' : ''}`;
+  $('#results').innerHTML = `<p class="muted">${r.results.length} 場會議</p>` + r.results.map(m => `<div class="result">
+    <a class="r-title" href="#${m.id}">📄 ${hl(m.title)}</a> <span class="muted">${esc(whenLabel(m))}</span> ${tag(TYPES[m.template] ?? TYPES.auto)}${m.tags.map(tagLink).join('')}${m.teams.map(teamLink).join('')}
+    ${m.hits.filter(h => h.field !== 'title').map(h => `<a class="hit" href="${link(m.id, h)}"><span class="hit-label">${h.label}${h.seg ? ` · ${fmt(h.at)} ${esc(h.speaker)}` : ''}</span>${hl(h.snippet)}</a>`).join('')}
+    ${m.transcriptHits > 5 ? `<p class="muted">逐字稿另有 ${m.transcriptHits - 5} 處符合</p>` : ''}</div>`).join('');
+}
+
+async function route() {
+  if (!me) return showLogin();
+  const h = location.hash.slice(1);
+  if (h.startsWith('share/')) { // opening a share link grants its permission, then shows the meeting
+    try { location.hash = (await api(`/api/shares/${encodeURIComponent(h.slice(6))}`, json('POST', {}))).id; }
+    catch (e) { page(`<p class="err">${esc(e.message)}</p>`); }
+    return;
+  }
+  const [id, sub] = h.split(':');
+  $('#main').scrollTop = 0;
+  const r = h.startsWith('search') ? 'search' : ['new', 'actions', 'people', 'me', 'admin'].includes(h) ? h : h ? '' : 'db';
+  document.querySelectorAll('aside [data-r]').forEach(a => a.classList.toggle('on', a.dataset.r === r));
+  const go = r === 'search' ? showSearch(decodeURIComponent(h.slice('search='.length)))
+    : h === 'new' ? showNew() : h === 'actions' ? showActions() : h === 'people' ? showPeople() : h === 'me' ? showMe() : h === 'admin' ? showAdmin()
+    : /^[0-9a-f-]{36}$/.test(id) ? openMeeting(id).then(() => sub?.startsWith('seg-') ? seek(+sub.slice(4)) : sub === 'notes' && setTab('notes'))
+    : !h ? showDb() : null;
+  Promise.resolve(go).catch(e => page(`<p class="err">${esc(e.message)}</p>`));
+}
+window.addEventListener('hashchange', route);
+// ---- 側欄：拖曳調整寬度、收合（⌘\），狀態存在 localStorage ----
+function setSideWidth(w) {
+  w = Math.round(Math.max(180, Math.min(480, w)));
+  document.documentElement.style.setProperty('--side-w', `${w}px`);
+  localStorage.setItem('sideW', w);
+}
+function toggleSide(collapse = !document.body.classList.contains('side-collapsed')) {
+  document.body.classList.toggle('side-collapsed', collapse);
+  localStorage.setItem('sideCollapsed', collapse ? '1' : '');
+}
+setSideWidth(+localStorage.getItem('sideW') || 240);
+toggleSide(localStorage.getItem('sideCollapsed') === '1');
+$('#resizer').addEventListener('pointerdown', e => {
+  e.preventDefault();
+  document.body.classList.add('resizing');
+  const move = ev => setSideWidth(ev.clientX);
+  const up = () => { document.body.classList.remove('resizing'); removeEventListener('pointermove', move); removeEventListener('pointerup', up); };
+  addEventListener('pointermove', move);
+  addEventListener('pointerup', up);
+});
+$('#resizer').addEventListener('dblclick', () => setSideWidth(240));
+
+document.addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === '\\') { e.preventDefault(); toggleSide(); }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault();
+    if (location.hash.startsWith('#search')) $('#q')?.focus(); else location.hash = 'search';
+  }
+});
+boot();
+</script>
+</body>
+</html>

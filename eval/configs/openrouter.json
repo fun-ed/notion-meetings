@@ -1,0 +1,4 @@
+[["mai", {"model":"microsoft/mai-transcribe-2","language":"zh","response_format":"verbose_json","timestamp_granularities":["segment","word"],"provider":{"zdr":true,"options":{"azure":{"diarization":{"enabled":true}}}}}],
+ ["mai+terms", {"model":"microsoft/mai-transcribe-2","language":"zh","response_format":"verbose_json","timestamp_granularities":["segment","word"],"provider":{"zdr":true,"options":{"azure":{"diarization":{"enabled":true},"phraseList":{"phrases":"$TERMS"}}}}}],
+ ["scribe+terms", {"model":"elevenlabs/scribe-v2","language":"zh","response_format":"verbose_json","timestamp_granularities":["word"],"provider":{"zdr":true,"options":{"elevenlabs":{"diarize":true,"keyterms":"$TERMS"}}}}],
+ ["aai+terms", {"model":"assemblyai/universal-3-6-pro","language":"zh","response_format":"verbose_json","provider":{"zdr":true,"options":{"assemblyai":{"speaker_labels":true,"keyterms_prompt":"$TERMS"}}}}]]
