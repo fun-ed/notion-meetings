@@ -28,7 +28,7 @@ description: Develop, fix, or maintain the notion-meetings app (server.js routes
 - 逐字稿保留說話者原本的用詞和語氣。校對只修術語表裡的詞，不確定就標【?】；`raw` 一定要保存。台灣口吻只出現在摘要。
 - 音訊只送 ZDR 端點（`provider.zdr: true`）。伺服器只綁 `127.0.0.1`。瀏覽器即時字幕預設關閉，只能用本機辨識（`processLocally`），不能改用雲端（D-019）。
 - 金鑰只從環境變數、`~/.config/<服務>/key`，或後台輸入後存在 `DATA_DIR/secrets.json`（權限 600）的 key 讀取。不寫進專案、不印出，也不從任何 API 回傳（只回 `keyStatus` 末四碼，D-021）。
-- LLM 一律經 `llm()` 呼叫，不要直接用 Anthropic SDK 或 fetch；用量由它記錄，重試也由它處理。
+- LLM 一律經 `llm()` 呼叫，不要直接用 Anthropic SDK 或 fetch；用量、費用與重試都由它處理。公司 LiteLLM 用 `npm run start:litellm`（D-022），端點網址與 key 只放在 `~/.config/litellm/`，不寫進 repo、文件或測試。
 - 時間一律 GMT+8：伺服器用 `nowIso()`／`localDay()`，介面用 `dt()`／`day()`；不要直接寫 `new Date().toISOString()` 或沒有 `timeZone` 的 `toLocaleString()`。
 - 會議資料夾一律經 `dir(id)`／`meetingIds()`（`data/<日期>/<id>/`），不要自己拼 `DATA/id`。
 - 每個新 API 都先決定需要的權限，在伺服器端檢查（`need(can(...))`）；看不到的會議回 404。介面的鎖定只是輔助。

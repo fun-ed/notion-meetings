@@ -215,3 +215,20 @@
   - gpt-6-luna 校對嚴苛音檔只有 39/45，不建議用在校對。
   - gpt-6.1-sol 曾把不確定的誤聽直接改成另一個術語（Postres→Postgres，原文是 OAuth），不如 Opus 保守。要靠 reliability 計畫第 4 項的 diff 驗證補強。
   - magpie 每次請求會多約 4K tokens 的提示。
+
+## D-022 `npm run start:litellm`：文字 LLM 全部走公司 LiteLLM，轉錄暫留 OpenRouter
+
+- 日期：2026-10-21。狀態：採用（使用者要求），0.6.0 實作。
+- 決策：
+  - `npm run start:litellm` 從 `~/.config/litellm/base_url`、`~/.config/litellm/key` 讀端點與 key（可以用 `LITELLM_BASE_URL`、`LITELLM_API_KEY` 覆寫），設定 `LLM_PROVIDER=openai`。
+  - 這樣沒有自己 Endpoint 的模型（含 Claude）都經 OpenAI 相容端點呼叫，模型 ID 裡 magpie 的前綴（`codex/`、`copilot/`、`devin/`）自動去掉，`x-litellm-response-cost` 記成 `costUsd`。
+  - 預設仍是 magpie（`npm run start:magpie`），內建模型 ID 用 magpie 的名稱；LiteLLM 是使用者自行選用的設定。
+  - 端點網址與 key 只放在每台 Mac，不寫進 repo（repo 是公開的）。
+- 理由：
+  - 使用者要一個指令就讓所有呼叫走公司 LiteLLM。
+  - 實測文字模型的分數和走 magpie 時相同，而且更快，也沒有 gateway 注入的提示。
+- 不採用：轉錄改走 LiteLLM。LiteLLM 上只有 `gpt-4o-transcribe` 系列與 `whisper-1`：
+  - 有分講者的那個，術語只有 27／11。
+  - 有術語的兩個沒有講者，而且會改寫內容或吐出提示詞（docs/research/2026-10-21-litellm.md）。
+  - LiteLLM 加上 MAI-Transcribe 2，並用 `eval/` 驗證通過後再改。
+- 後果：使用 `start:litellm` 時，轉錄仍需要 OpenRouter 金鑰，音訊仍送到 OpenRouter ZDR。

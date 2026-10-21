@@ -1,12 +1,13 @@
 {
   "name": "notion-meetings",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "repository": "https://github.com/fun-ed/notion-meetings",
   "private": true,
   "type": "module",
   "scripts": {
     "start": "node server.js",
     "start:magpie": "ANTHROPIC_BASE_URL=http://127.0.0.1:3425 ANTHROPIC_API_KEY=magpie OPENAI_BASE_URL=http://127.0.0.1:3425/v1 OPENAI_API_KEY=magpie node server.js",
+    "start:litellm": "bash scripts/start-litellm.sh",
     "test": "node --test",
     "build": "bash scripts/build.sh"
   },

@@ -30,7 +30,7 @@ Notion AI Meeting Notes 的本機復刻。錄音或上傳會議檔案後，會�
 |---|---|
 | ffmpeg | 要在 `PATH` 上（`brew install ffmpeg`、`apt install ffmpeg`） |
 | OpenRouter 金鑰 | 轉錄必備 |
-| Claude | 設定 `ANTHROPIC_API_KEY`，或用 `ANTHROPIC_BASE_URL` 指向 gateway |
+| LLM | magpie gateway（預設），或公司的 LiteLLM，見「執行」 |
 | Node.js | 只有從原始碼執行時需要 |
 
 OpenRouter 金鑰存在專案外、只有自己能讀的檔案（zsh 語法）：
@@ -43,23 +43,60 @@ read -s "K?OpenRouter key: " && mkdir -p ~/.config/openrouter && printf %s "$K" 
 
 ## 執行
 
-使用 Release 的執行檔（macOS、Linux、Windows）：
-
-```bash
-ANTHROPIC_API_KEY=... ./notion-meetings-v<版本>-darwin-arm64
-```
-
-macOS 下載後，第一次要先執行 `xattr -d com.apple.quarantine <檔案>`。資料存在 `~/.notion-meetings`。
+預設設定是所有 LLM 都走 magpie gateway，也可以改用公司的 LiteLLM（見下方）。轉錄一律使用 OpenRouter 的 MAI-Transcribe 2。
 
 從原始碼執行：
 
 ```bash
 mise exec -- npm install
+mise exec -- npm run start:magpie   # 預設：magpie gateway（127.0.0.1:3425）
+mise exec -- npm run start:litellm  # 改用公司 LiteLLM
 mise exec -- npm start              # Anthropic API（ANTHROPIC_API_KEY）
-mise exec -- npm run start:magpie   # 本機 magpie gateway（127.0.0.1:3425）
 ```
 
+使用 Release 執行檔（macOS、Linux、Windows）時，設定和 npm 指令相同的變數：
+
+```bash
+# magpie
+ANTHROPIC_BASE_URL=http://127.0.0.1:3425 ANTHROPIC_API_KEY=magpie OPENAI_BASE_URL=http://127.0.0.1:3425/v1 OPENAI_API_KEY=magpie ./notion-meetings-v<版本>-darwin-arm64
+# 公司 LiteLLM
+LLM_PROVIDER=openai OPENAI_BASE_URL="$(cat ~/.config/litellm/base_url)" OPENAI_API_KEY="$(cat ~/.config/litellm/key)" ./notion-meetings-v<版本>-darwin-arm64
+```
+
+macOS 下載後，第一次要先執行 `xattr -d com.apple.quarantine <檔案>`。執行檔的資料存在 `~/.notion-meetings`。
+
 開啟 <http://localhost:3000>。第一個建立的帳號是管理員。
+
+### 改用公司 LiteLLM
+
+1. 把端點與自己的 key 存在這台 Mac、repo 之外（只要做一次）：
+
+   ```bash
+   mkdir -p ~/.config/litellm && chmod 700 ~/.config/litellm
+   echo 'https://<你的 LiteLLM 主機>/v1' > ~/.config/litellm/base_url
+   read -s "K?LiteLLM key: " && printf %s "$K" > ~/.config/litellm/key && chmod 600 ~/.config/litellm/key && unset K
+   ```
+
+2. 用 `mise exec -- npm run start:litellm` 啟動。沒有自己 Endpoint 的內建模型（含 Claude）都會改走 LiteLLM；模型 ID 裡 magpie 的前綴（`codex/`）會自動去掉；每次呼叫都會記錄 LiteLLM 回報的費用。
+3. 在「管理後台 › 模型」對要用的模型按「測試」，確認有回應。
+
+兩種設定的轉錄都維持 OpenRouter 的 MAI-Transcribe 2，所以仍需要 OpenRouter key。原因是公司 LiteLLM 上的轉錄模型，都達不到台灣繁體、術語與分講者的基準（[實測報告](docs/research/2026-10-21-litellm.md)）。
+
+### 模型搭配
+
+結果來自合成測試組（[OpenAI 模型評測](docs/research/2026-10-21-openai-models.md)、[LiteLLM 實測](docs/research/2026-10-21-litellm.md)）。
+
+| 模型 | magpie ID | LiteLLM ID | 適合 | 說明 |
+|---|---|---|---|---|
+| Claude Opus 5.5 | `claude-opus-5-5` | `claude-opus-5-5` | 全部用途的預設 | 術語校對最保守，不確定就標【?】，不會硬猜 |
+| Claude Sonnet 5.5 | `claude-sonnet-5-5` | `claude-sonnet-5-5` | 想省成本的摘要 | 在 LiteLLM 上的輸入價格是 Opus 的一半 |
+| GPT-6.1 Sol | `codex/gpt-6.1-sol` | `gpt-6.1-sol` | 摘要，或想要快的術語校對 | 校對通過（45/45、42/45），速度快好幾倍，但曾把聽錯的字直接改成另一個術語、沒有標【?】 |
+| GPT-6 Luna | `codex/gpt-6-luna` | `gpt-6-luna` | 不要用在術語校對 | 最快也最便宜，但校對在嚴苛音檔只有 39/45，沒有通過 |
+| MAI-Transcribe 2 | — | — | 轉錄 | 兩種設定都經 OpenRouter（零資料保留） |
+
+建議：預設模型維持 Opus 5.5。想讓摘要更快或更省，就把預設模型換成 Sonnet 5.5 或 GPT-6.1 Sol（或在 Agent 指定），再到「管理後台 › 模型 › 用途」把術語校對指定為 Opus 5.5。講者建議用 low effort，上面幾個模型都可以。
+
+### 設定
 
 | 環境變數 | 預設值 | 用途 |
 |---|---|---|
@@ -67,14 +104,13 @@ mise exec -- npm run start:magpie   # 本機 magpie gateway（127.0.0.1:3425）
 | `DATA_DIR` | `./data`（執行檔：`~/.notion-meetings`） | 會議、帳號、名錄與模型設定 |
 | `OPENROUTER_API_KEY` | `~/.config/openrouter/key` | 轉錄金鑰 |
 | `ANTHROPIC_BASE_URL`、`ANTHROPIC_API_KEY` | Anthropic API | Anthropic 模型的預設端點與金鑰 |
-| `OPENAI_BASE_URL`、`OPENAI_API_KEY` | — | OpenAI 相容模型（例如 LiteLLM）的預設端點與金鑰 |
+| `OPENAI_BASE_URL`、`OPENAI_API_KEY` | — | OpenAI 相容模型的預設端點與金鑰 |
+| `LLM_PROVIDER` | — | 設成 `openai` 時，沒有自己 Endpoint 的模型（含 Claude）都經 `OPENAI_BASE_URL` 呼叫；`npm run start:litellm` 會設定 |
 
-管理員在「管理後台 › 模型」設定 LLM。每個模型有 provider、LLM Endpoint 與 API key：
-
-- **OpenAI 相容**（建議）：公司的 LiteLLM、magpie 或 OpenAI，例如 `https://litellm.example.com/v1`。可以按「讀取模型」從端點挑選模型 ID。
-- **Anthropic**：原生 Anthropic API。
-
-API key 在後台輸入一次，只存在這台 Mac 的 `data/secrets.json`（權限 600）。同一個端點的模型共用，介面只顯示末四碼；也可以改填環境變數名稱。術語校對與講者建議可以各自指定模型。內建的設定有 Claude Opus 5.5（預設）、Sonnet 5.5、GPT-6.1 Sol、GPT-6 Luna。
+管理員也可以在「管理後台 › 模型」為個別模型設定 Endpoint 與 API key：
+- LiteLLM、magpie、OpenAI 用「OpenAI 相容」，原生 Anthropic API 用「Anthropic」。
+- 「讀取模型」會列出端點提供的模型 ID。
+- 在這裡輸入的 key 只存在這台 Mac 的 `data/secrets.json`（權限 600），同一個端點的模型共用，介面只顯示末四碼。
 
 ## 搜尋語法
 

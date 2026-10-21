@@ -13,12 +13,12 @@ export const BUILTIN_MODELS = [
     contextWindow: 1_000_000, maxOutput: 64_000, effort: 'medium', enabled: true, default: true, systemAddition: '' },
   { id: 'sonnet', label: 'Claude Sonnet 5.5', provider: 'anthropic', model: 'claude-sonnet-5-5', baseURL: '', apiKeyEnv: '',
     contextWindow: 1_000_000, maxOutput: 64_000, effort: 'high', enabled: true, default: false, systemAddition: '' },
-  // OpenAI models default to OPENAI_BASE_URL / OPENAI_API_KEY (magpie in npm run start:magpie); model IDs are magpie's and are
-  // usually different on LiteLLM, where admins pick them with "讀取模型". Context and output limits are unconfirmed guesses.
+  // OpenAI models use OPENAI_BASE_URL / OPENAI_API_KEY. Model IDs are magpie's (the default gateway); npm run start:litellm drops
+  // the codex/ prefix to get LiteLLM's names. Limits are from LiteLLM's /model/info (1.05M input; output capped at 64K).
   { id: 'gpt', label: 'OpenAI GPT-6.1 Sol', provider: 'openai', model: 'codex/gpt-6.1-sol', baseURL: '', apiKeyEnv: '',
-    contextWindow: 200_000, maxOutput: 32_000, effort: 'medium', enabled: false, default: false, systemAddition: '' },
+    contextWindow: 1_050_000, maxOutput: 64_000, effort: 'medium', enabled: false, default: false, systemAddition: '' },
   { id: 'gpt-luna', label: 'OpenAI GPT-6 Luna', provider: 'openai', model: 'codex/gpt-6-luna', baseURL: '', apiKeyEnv: '',
-    contextWindow: 200_000, maxOutput: 32_000, effort: 'low', enabled: false, default: false, systemAddition: '' },
+    contextWindow: 1_050_000, maxOutput: 64_000, effort: 'low', enabled: false, default: false, systemAddition: '' },
   { id: 'gemini', label: 'Gemini 4（規劃中）', provider: 'gemini', model: 'gemini-4-argon', baseURL: '', apiKeyEnv: 'GEMINI_API_KEY',
     contextWindow: 0, maxOutput: 0, effort: 'medium', enabled: false, default: false, systemAddition: '' },
 ];

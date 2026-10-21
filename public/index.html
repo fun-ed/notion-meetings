@@ -251,7 +251,7 @@ const usageRows = rows => `<div class="scroll-x"><table class="db usage"><thead>
 const totalOf = rows => ({ calls: rows.length,
   ...Object.fromEntries(['inputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'outputTokens', 'ms', 'audioSeconds', 'costUsd'].map(f => [f, rows.reduce((a, e) => a + (e[f] ?? 0), 0)])) });
 const usageLine = t => `${t.calls} 次 · 輸入 ${num(inTotal(t))}／輸出 ${num(t.outputTokens)} tokens · 耗時 ${secs(t.ms)}`
-  + (t.audioSeconds ? ` · 音訊 ${fmt(t.audioSeconds)}` : '') + (t.costUsd ? ` · 轉錄費用 ${usd(t.costUsd)}` : '');
+  + (t.audioSeconds ? ` · 音訊 ${fmt(t.audioSeconds)}` : '') + (t.costUsd ? ` · 費用 ${usd(t.costUsd)}` : '');
 const prop = (icon, label, html) => `<div class="prop"><span>${icon} ${label}</span><div>${html}</div></div>`;
 let rate = +localStorage.getItem('rate') || 1, activeSeg = 0, pick = null; // pick: open speaker range picker {from, to}
 let meetings = [], current = null, pollTimer = null, tab = 'summary', showRaw = false, searchQ = '', searchTimer;
@@ -407,7 +407,7 @@ async function showAdmin() {
       || '<tr><td colspan="7" class="muted">還沒有分享連結</td></tr>'}</tbody></table>
     <h2 class="h2">📊 AI 用量</h2>
     ${a.usage.total ? `<p>合計：${usageLine(a.usage.total)}</p>
-      <p class="muted">轉錄費用是 OpenRouter 回報的實際金額。總輸入＝未快取輸入＋快取讀取＋快取寫入；Claude 走 magpie 時是 gateway 回報的值，可能包含 gateway 自己加入的提示。輸出 tokens 已包含 thinking。</p>
+      <p class="muted">費用是 OpenRouter（轉錄）與 LiteLLM 回報的實際金額；magpie 不回報費用。總輸入＝未快取輸入＋快取讀取＋快取寫入；走 magpie 時是 gateway 回報的值，可能包含 gateway 自己加入的提示。輸出 tokens 已包含 thinking。</p>
       ${[['依項目', '項目', a.usage.byKind, k => KIND[k] ?? k], ['依模型', '模型', a.usage.byModel, k => k], ['依日期（最近 30 天）', '日期', a.usage.byDay, k => k]].map(([title, col, rows, label]) => `<h3>${title}</h3>
       <table class="db usage"><thead><tr><th>${col}</th><th>次數</th><th>失敗</th><th>總輸入</th><th>輸出</th><th>其中快取讀／寫</th><th>音訊</th><th>費用</th><th>耗時</th></tr></thead><tbody>
       ${rows.map(r => `<tr><td>${esc(label(r.key))}</td><td>${r.calls}</td><td>${r.errors || ''}</td><td>${num(inTotal(r))}</td><td>${num(r.outputTokens)}</td>
@@ -439,10 +439,10 @@ async function renderLearnAdmin(msg = '') {
     <div class="learn-row">${d.bench.cases.length} 場凍結的會議：${d.bench.cases.map(c => `<a href="#${esc(c.meetingId)}">📄 ${esc(byId[c.meetingId]?.title ?? c.meetingId)}</a>`).join('、') || '—'}
       <button onclick="runBench()" ${d.bench.running || !d.bench.cases.length ? 'disabled' : ''}>${d.bench.running ? `⏳ 執行中（${dt(d.bench.running.startedAt)} 開始）` : '▶ 執行 benchmark'}</button>
       ${d.bench.lastError ? `<span class="err">上次失敗：${esc(d.bench.lastError)}</span>` : ''}</div>
-    <div class="scroll-x"><table class="db usage"><thead><tr><th>時間</th><th>版本</th><th>團隊術語</th><th>講者正確率</th><th>CER</th><th>費用</th><th>耗時</th><th>各場</th></tr></thead><tbody>
-    ${[...d.bench.runs].reverse().map(r => `<tr><td>${dt(r.finishedAt)}</td><td>${esc(r.version)}</td><td>${r.teamTerms}</td><td>${pct(r.speakerAccuracy)}</td><td>${pct(r.cer)}</td>
+    <div class="scroll-x"><table class="db usage"><thead><tr><th>時間</th><th>版本</th><th>設定</th><th>講者正確率</th><th>CER</th><th>費用</th><th>耗時</th><th>各場</th></tr></thead><tbody>
+    ${[...d.bench.runs].reverse().map(r => `<tr><td>${dt(r.finishedAt)}</td><td>${esc(r.version)}</td><td>${r.fingerprint ? `校對 ${esc(r.fingerprint.correct)}<br>術語 ${r.teamTerms} 個（${esc(r.fingerprint.terms)}）` : `術語 ${r.teamTerms} 個`}</td><td>${pct(r.speakerAccuracy)}</td><td>${pct(r.cer)}</td>
       <td>${usd(r.costUsd)}</td><td>${secs(r.ms)}</td><td>${r.cases.map(c => c.error ? `<span class="err">${esc(c.error)}</span>`
-        : `${esc(c.title)}：講者 ${pct(c.accuracy)}（每 15 分 ${c.windows.map(pct).join('／')}；${c.labels}／${c.refSpeakers} 位）· CER ${pct(c.cer)} · 術語 ${c.terms.hit}/${c.terms.all} · 【?】${c.unsure}`).join('<br>')}</td></tr>`).join('')
+        : `${esc(c.title)}：講者 ${pct(c.accuracy)}（每 15 分 ${c.windows.map(pct).join('／')}；漏 ${pct(c.missed)}；${c.labels}／${c.refSpeakers} 位）· CER ${pct(c.cer)} · 術語 ${c.terms.hit}/${c.terms.all} · 【?】${c.unsure}`).join('<br>')}</td></tr>`).join('')
       || '<tr><td colspan="8" class="muted">還沒有執行紀錄</td></tr>'}</tbody></table></div>`;
   if (d.bench.running) setTimeout(() => location.hash === '#admin' && renderLearnAdmin(), 5000);
 }
@@ -470,6 +470,7 @@ function renderAIAdmin(msg = '') {
     <p class="muted">每個模型設定自己的 LLM Endpoint 與 API key。「OpenAI 相容」適用公司 LiteLLM、magpie、OpenAI 等 <code>/v1/chat/completions</code> 端點；「Anthropic」是原生 Anthropic API。
       Endpoint 留空時，OpenAI 相容用 <code>OPENAI_BASE_URL</code>，Anthropic 用 <code>ANTHROPIC_BASE_URL</code>。API key 只存在這台電腦的 <code>data/secrets.json</code>，同一個 Endpoint 的模型共用，存了之後看不到完整內容；也可以改填環境變數名稱。
       <b>逐字稿與筆記會送到這裡設定的端點</b>。送出前會檢查內容加輸出上限是否超過 context window。</p>
+    ${aiCfg.viaOpenAI ? `<p class="notice">目前以 <code>npm run start:litellm</code> 啟動：沒有自己 Endpoint 的模型（含 Claude）都經 <code>${esc(aiCfg.viaOpenAI)}</code> 呼叫，金鑰取自 <code>~/.config/litellm/key</code>，這裡不必另外設定。</p>` : ''}
     <div class="scroll-x"><table class="db"><thead><tr><th>啟用</th><th>預設</th><th>名稱／附加提示</th><th>Provider</th><th>LLM Endpoint</th><th>API key</th><th>Model ID</th><th>Context</th><th>輸出上限</th><th>Effort</th><th>測試</th></tr></thead><tbody>
     ${aiCfg.models.map((m, i) => `<tr data-model data-i="${i}">
       <td><input type="checkbox" data-f="enabled" ${m.enabled ? 'checked' : ''} aria-label="啟用 ${esc(m.label)}"></td>

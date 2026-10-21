@@ -8,7 +8,7 @@ import http from 'node:http';
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'meetings-'));
 process.env.OPENROUTER_API_KEY = ''; // never call the real API from tests
 const ai = await import('./ai.js');
-const { parseTranscription, transcriptText, extOf, toTaiwan, parseTerms, applyNumbered, parseActions, cleanMeta, parseQuery, searchMeetings, parseDirectory, resolver, usageOf, aggregateUsage, migrateLayout, reassignSpeakers, openaiUsage, isTransient, keyScope, mergeTerms, flagForeignScript, cleanHints, cer, speakerAccuracy, termHits, localDay, nowIso, searchMeetings: search2, server } = await import('./server.js');
+const { parseTranscription, transcriptText, extOf, toTaiwan, parseTerms, applyNumbered, parseActions, cleanMeta, parseQuery, searchMeetings, parseDirectory, resolver, usageOf, aggregateUsage, migrateLayout, reassignSpeakers, openaiUsage, isTransient, keyScope, viaEnv, mergeTerms, flagForeignScript, cleanHints, cer, speakerAccuracy, bestAssignment, termHits, localDay, nowIso, searchMeetings: search2, server } = await import('./server.js');
 
 test('parseTranscription maps verbose_json segments to speaker segments', () => {
   const r = parseTranscription({ language: 'zh', segments: [
@@ -41,7 +41,17 @@ test('learning loop: term merge, foreign-script flag, speaker hints, benchmark m
   assert.equal(Math.round(cer('abcd', 'abxd') * 100), 25);
   const ref = [{ start: 0, end: 10, speaker: 'Amy' }, { start: 10, end: 20, speaker: 'Bob' }, { start: 900, end: 910, speaker: 'Amy' }];
   const hyp = [{ start: 0, end: 10, speaker: '0' }, { start: 10, end: 20, speaker: '1' }, { start: 900, end: 910, speaker: '1' }];
-  assert.deepEqual(speakerAccuracy(ref, hyp), { accuracy: 66.7, windows: [100, 0], labels: 2, refSpeakers: 2 }, 'a drifted label counts as wrong in its window');
+  assert.deepEqual(speakerAccuracy(ref, hyp), { accuracy: 66.7, windows: [100, 0], missed: 0, labels: 2, refSpeakers: 2 }, 'a drifted label counts as wrong in its window');
+  assert.deepEqual(speakerAccuracy([{ start: 0, end: 10, speaker: 'Amy' }], [{ start: 0, end: 1, speaker: '0' }]),
+    { accuracy: 10, windows: [10], missed: 90, labels: 1, refSpeakers: 1 }, 'only the covered second counts; the rest is missed');
+  assert.deepEqual(speakerAccuracy([{ start: 890, end: 910, speaker: 'Amy' }], [{ start: 890, end: 910, speaker: '0' }]).windows.slice(-2), [100, 100],
+    'speech across a window boundary is split between the windows');
+  // Greedy pairing would give label 0 to Bob (its largest share) and leave Amy unmatched; the best assignment pairs 0→Amy, 1→Bob.
+  const g = speakerAccuracy([{ start: 0, end: 6, speaker: 'Amy' }, { start: 6, end: 13, speaker: 'Bob' }, { start: 13, end: 18, speaker: 'Bob' }],
+    [{ start: 0, end: 13, speaker: '0' }, { start: 13, end: 18, speaker: '1' }]);
+  assert.equal(g.accuracy, 61.1, 'one-to-one pairing that maximizes total shared time');
+  assert.deepEqual(bestAssignment([[6, 7], [0, 5]]), [0, 1]);
+  assert.deepEqual(bestAssignment([[0, 0], [3, 0]]), [-1, 0], 'labels with no shared time stay unpaired');
   assert.deepEqual(termHits('EKS 和 eks 與 IRSA', 'EKS 與 irsa', ['EKS', 'IRSA']), { hit: 2, all: 3 });
 });
 
@@ -381,6 +391,16 @@ test('OpenAI-compatible models: usage mapping, transient errors, per-use model, 
   assert.equal(ai.pickFor(cfg, 'correct').model.id, 'gpt-luna', 'an enabled OpenAI model can be picked for a use');
   assert.equal(ai.pickFor(cfg, 'speakers').model.id, 'opus', 'unknown or disabled falls back to the default model');
   assert.equal(ai.pickAI({ models: [{ ...ai.BUILTIN_MODELS[0], enabled: false, default: false }, { ...ai.BUILTIN_MODELS[2], enabled: true }] }).model.id, 'gpt', 'OpenAI models are usable as default');
+  // npm run start:litellm: Anthropic profiles without their own endpoint go through the OpenAI-compatible endpoint.
+  const opus = ai.BUILTIN_MODELS[0];
+  assert.equal(viaEnv(opus).provider, 'anthropic', 'off unless LLM_PROVIDER=openai');
+  process.env.LLM_PROVIDER = 'openai';
+  try {
+    assert.deepEqual([viaEnv(opus).provider, viaEnv(opus).model], ['openai', 'claude-opus-5-5']);
+    assert.equal(viaEnv({ ...opus, baseURL: 'https://api.anthropic.com' }).provider, 'anthropic', 'a model with its own endpoint keeps it');
+    assert.equal(viaEnv(ai.BUILTIN_MODELS.find(m => m.id === 'gpt')).model, 'gpt-6.1-sol', 'magpie prefix dropped for LiteLLM');
+    assert.equal(ai.BUILTIN_MODELS.find(m => m.id === 'gpt').model, 'codex/gpt-6.1-sol', 'built-in IDs default to magpie');
+  } finally { delete process.env.LLM_PROVIDER; }
 });
 
 test('OpenAI-compatible endpoint: write-only key, model list, retry on 503', async () => {
@@ -391,6 +411,7 @@ test('OpenAI-compatible endpoint: write-only key, model list, retry on 503', asy
     if (req.url === '/v1/models') return res.end(JSON.stringify({ data: [{ id: 'gpt-6-luna' }, { id: 'gpt-6.1-sol' }] }));
     calls++;
     if (calls === 1) { res.statusCode = 503; return res.end(JSON.stringify({ error: { message: 'busy' } })); }
+    res.setHeader('x-litellm-response-cost', '0.000308');
     res.end(JSON.stringify({ model: 'gpt-6-luna', choices: [{ message: { content: 'OK' }, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 2 } }));
   });
   await new Promise(r => fake.listen(0, '127.0.0.1', r));
@@ -408,6 +429,7 @@ test('OpenAI-compatible endpoint: write-only key, model list, retry on 503', asy
     assert.deepEqual((await (await admin(`${api}/admin/ai/models/gpt-luna/list`, json('POST', {}))).json()).models, ['gpt-6-luna', 'gpt-6.1-sol']);
     const t = await (await admin(`${api}/admin/ai/models/gpt-luna/test`, json('POST', {}))).json();
     assert.deepEqual([t.ok, t.reply, calls], [true, 'OK', 2], 'a 503 is retried once and then succeeds');
+    assert.equal(t.usage.costUsd, 0.000308, 'the LiteLLM cost header is recorded');
     assert.ok(auths.every(a => a === 'Bearer sk-test-12345678'), 'the stored key is sent to the endpoint');
   } finally { fake.close(); }
 });

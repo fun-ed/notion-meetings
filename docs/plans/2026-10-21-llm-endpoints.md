@@ -5,7 +5,7 @@
 - 校對、摘要與講者建議可以使用這些端點上的任何模型，第一批適配 gpt-6.1-sol、gpt-6-luna。
 - 依實測結果，決定每個用途的預設模型。
 
-轉錄仍用 MAI-Transcribe 2（OpenRouter），不在這份計畫的範圍。
+轉錄原本不在範圍內。2026-10-21 起，使用者啟用 LiteLLM 端點時，轉錄也要走 LiteLLM，見下方「轉錄走 LiteLLM」。
 
 狀態：O1、O1b、O2 已在 0.5.0 實作（D-021），O3 完成合成測試部分（[評測](../research/2026-10-21-openai-models.md)）。
 
@@ -109,3 +109,48 @@ D-008 寫的是「逐字稿文字送 Claude」。改成可自訂端點後，逐�
 | O2 | 校對與講者建議可以指定模型 | 設定生效，並有測試 |
 | O3 | 依上面的評估方式比較三個模型 | 結果寫進 `docs/research/`，並依結果決定每個用途的預設模型 |
 | O4 | 文件與決策 | 新增決策（OpenAI 的資料邊界與預設模型），更新 architecture、README、`meetings-dev` skill |
+
+## 公司 LiteLLM 實測（2026-10-21）
+
+詳見 [LiteLLM 實測](../research/2026-10-21-litellm.md)。
+- 文字模型全部可用，0.6.0 加了 `npm run start:litellm`（D-022）。
+- 相容性清單中的 `reasoning_effort`、上限、費用、gateway 提示都已確認，結果記在報告。
+- 轉錄：LiteLLM 上沒有 MAI-Transcribe，現有的轉錄模型都不達標，所以轉錄暫留 OpenRouter。下一步請 LiteLLM 管理員加上 MAI-Transcribe 2。
+
+## 轉錄走 LiteLLM（2026-10-21 新增）
+
+使用者啟用 LiteLLM 端點時，音訊也送到同一個 LiteLLM，不再直接呼叫 OpenRouter。這樣音訊和文字都留在公司 LiteLLM 的資料邊界內，ZDR 由公司的 LiteLLM 設定保證。
+
+設計：
+- 管理後台新增「轉錄端點」：`OpenRouter`（目前的做法）或 `LiteLLM`（OpenAI 相容的 `POST {endpoint}/audio/transcriptions`）。選了 LiteLLM 時，共用同一組 Endpoint 與 API key（`secrets.json`）。
+- 請求改成 OpenAI 的 multipart 格式：`file`、`model`、`language`、`response_format=verbose_json`、`timestamp_granularities[]=segment`。分講者與術語清單這類服務商專屬參數，看 LiteLLM 能不能轉送。
+- 用量記錄音訊秒數；費用改讀 LiteLLM 的 `x-litellm-response-cost`。
+
+一定要保留的能力：分講者、術語清單（團隊術語）、段落時間戳、語言設定。
+
+要用公司端點實測才知道的事：
+1. LiteLLM 提供哪個轉錄模型：Azure 上的 MAI-Transcribe 2，或以 OpenRouter 當上游。
+2. 分講者（`diarization`）與術語清單（`phraseList`）能不能經 LiteLLM 傳到 MAI，回應裡有沒有 `speaker`。
+3. 長音檔的大小與逾時限制。
+
+風險：如果經 LiteLLM 拿不到分講者，講者分離會大幅退步。備案是本機分講者與聲紋（[learning-loop](2026-10-21-learning-loop.md) 的 P5），或保留「轉錄走 OpenRouter」的選項。
+
+完成條件：用公司 LiteLLM 跑 `eval/e2e.py` 兩項 PASS（含講者 9/9）；三段真實錄音的 benchmark 不比 OpenRouter 差。
+
+## LiteLLM 相容性清單
+
+公司內網沒有自訂 CA，也沒有 proxy，不需要處理憑證與代理設定。
+
+| 項目 | 0.5.0 狀態 | 待做 |
+|---|---|---|
+| Endpoint 路徑 | 填 `https://<host>/v1` 或 `https://<host>` 都可以 | 公司端點實測 |
+| 金鑰 | LiteLLM virtual key 用 Bearer 送出 | 公司端點實測 |
+| 模型名稱 | 用「讀取模型」從 `/models` 挑選 LiteLLM 的別名 | — |
+| `reasoning_effort` | 一律送出 | 不支援的模型會回 400（除非 LiteLLM 開了 `drop_params`）。每個模型加「不送 effort」選項，或遇到不支援參數的 400 時自動拿掉重送 |
+| Context／輸出上限 | 手動填 | 讀 `/model/info` 的 `max_input_tokens`、`max_output_tokens` 自動帶入 |
+| 費用 | 只記 tokens | 記錄 `x-litellm-response-cost` |
+| 逾時 | 單次請求 600 秒、不串流 | 長會議的校對分段送出，或改成串流 |
+| 重試 | 429、5xx 自動重試 2 次 | 已涵蓋 LiteLLM 的 rate limit |
+| Prompt cache | 沒送 `cache_control` | 經 LiteLLM 呼叫 Claude 時不會快取，之後評估 |
+| 對話紀錄 | — | 確認公司 LiteLLM 有沒有把對話內容記到 Langfuse 之類的紀錄系統 |
+

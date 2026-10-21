@@ -2,6 +2,34 @@
 
 每一版列出新增內容與當時的驗證結果；版本號在 `package.json`，時間一律是台灣時間（GMT+8）。決策理由在 [docs/decisions.md](docs/decisions.md)，評測數據在 [docs/research/](docs/research/)。
 
+## 0.6.0（2026-10-21）
+
+公司 LiteLLM 實測與一鍵切換（D-022，報告見 [docs/research/2026-10-21-litellm.md](docs/research/2026-10-21-litellm.md)）。
+
+### 新增
+
+- **`npm run start:litellm`**：從 `~/.config/litellm/base_url`、`~/.config/litellm/key` 讀端點與 key，所有內建模型（含 Claude）的校對、摘要、講者建議都經公司 LiteLLM。端點與 key 不進 repo。執行檔改設 `LLM_PROVIDER=openai`、`OPENAI_BASE_URL`、`OPENAI_API_KEY`。
+- **記錄 LiteLLM 的實際費用**：`x-litellm-response-cost` 記進每次呼叫的用量；會議頁與後台的費用欄不再只限轉錄。
+- 預設仍用 magpie（`npm run start:magpie`）。內建 GPT 模型 ID 維持 magpie 的名稱（`codex/gpt-6.1-sol`、`codex/gpt-6-luna`）；`start:litellm` 會自動去掉 `codex/` 這類前綴，換成 LiteLLM 的名稱，不用手動修改。上限依 LiteLLM 的 `/model/info` 改成 1.05M／64K。
+- README（英文、繁中）新增「改用公司 LiteLLM」的步驟與「模型搭配」表：每個模型在 magpie 與 LiteLLM 的 ID、適合的用途與實測結果。
+
+### 修正
+
+- **benchmark 的講者正確率會高估**（外部 review 指出）：原本只要重疊最多的輸出段配對正確，就把整段參考時長算成正確；例如 10 秒的發言只被輸出覆蓋 1 秒，也算 100%。現在只計實際重疊而且配對正確的時間，另外列出漏掉的語音比例；跨越 15 分鐘邊界的發言會拆開計算；講者配對改用匈牙利演算法，取整體最佳的一對一組合。之前算出的真實錄音「講者 100%」作廢。
+- 模型連線測試第一次失敗、重試成功時，顯示的是失敗那次的用量；改成顯示最後一次。
+
+### 驗證
+
+- `npm test` 20 項全過。新增：`LLM_PROVIDER` 的切換規則、費用標頭的記錄。
+- 公司 LiteLLM：
+  - 232 個模型；Opus／Sonnet 5.5、gpt-6.1-sol、gpt-6-luna 都能呼叫，也都接受 `reasoning_effort`。
+  - 沒有 gateway 注入的提示；`/model/info` 可以取得上限。
+- `npm run start:litellm` 不改任何設定跑 `eval/e2e.py`：乾淨 45/45、嚴苛 42/45、講者 9/9；每場都記到實際費用。
+- 轉錄模型（`gpt-4o-transcribe-diarize`、`gpt-4o-transcribe`、`whisper-1`）都不達標，轉錄維持 OpenRouter。
+- 啟動腳本確認不會把 key 印出。
+- benchmark：新增測試涵蓋「1 秒覆蓋 10 秒發言＝10%」「跨視窗拆開」「最佳配對優於貪婪配對（61.1% 對 38.9%）」；每次執行記錄設定指紋，後台顯示。
+- [benchmark 標準](docs/research/2026-10-21-benchmark-standards.md) 新增「各設定的準確度總表」。
+
 ## 0.5.0（2026-10-21）
 
 LLM 改用使用者設定的端點，以 OpenAI 相容為主（D-021，計畫見 [docs/plans/2026-10-21-llm-endpoints.md](docs/plans/2026-10-21-llm-endpoints.md)）。

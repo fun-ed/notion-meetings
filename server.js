@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { randomUUID, randomBytes } from 'node:crypto';
+import { randomUUID, randomBytes, createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { pipeline } from 'node:stream/promises';
@@ -255,7 +255,8 @@ async function openaiChat(model, effort, system, content, apiKey) {
   const choice = body.choices?.[0];
   if (choice?.message?.refusal || choice?.finish_reason === 'content_filter') throw new Error(`${model.label} 拒絕處理這段內容`);
   if (choice?.finish_reason === 'length') throw new Error(`${model.label} 的輸出超過上限，請在管理後台提高輸出上限`);
-  return { text: choice?.message?.content ?? '', body };
+  // LiteLLM reports the real cost of the call in a header.
+  return { text: choice?.message?.content ?? '', body, costUsd: Number(res.headers.get('x-litellm-response-cost')) || 0 };
 }
 
 // Upstream hiccups (rate limits, 5xx, a stream cut short) are retried; bad requests and refusals are not.
@@ -264,8 +265,16 @@ export const isTransient = e => [408, 409, 429, 500, 502, 503, 504, 529].include
 const RETRY_DELAYS = [2000, 8000];
 
 // Call the model's provider; every attempt, failed or not, is recorded in `log`.
+// LLM_PROVIDER=openai (npm run start:litellm) sends every model without its own endpoint through the OpenAI-compatible
+// OPENAI_BASE_URL, so one LiteLLM serves Claude and GPT alike. Built-in IDs are magpie's; LiteLLM names drop the
+// magpie account prefix (codex/gpt-6.1-sol -> gpt-6.1-sol).
+export const viaEnv = m => (process.env.LLM_PROVIDER === 'openai' && CALLABLE_VIA_ENV.includes(m.provider) && !m.baseURL
+  ? { ...m, provider: 'openai', model: m.model.replace(/^(codex|copilot|devin)\//, '') } : m);
+const CALLABLE_VIA_ENV = ['anthropic', 'openai'];
+
 async function llm(system, content, opts = {}) {
-  const { model, effort } = opts.model ? opts : ai.pickAI(await aiStore.read());
+  const picked = opts.model ? opts : ai.pickAI(await aiStore.read());
+  const { effort } = picked, model = viaEnv(picked.model);
   const { log = [], kind = 'llm' } = opts;
   if (!ai.CALLABLE.includes(model.provider)) throw fail(400, `${model.provider} 尚未支援（規劃中）`);
   ai.checkContext(model, system + content);
@@ -275,8 +284,8 @@ async function llm(system, content, opts = {}) {
     let logged = false; // a refusal arrives after its usage was recorded
     try {
       if (model.provider === 'openai') {
-        const { text, body } = await openaiChat(model, effort, system, content, apiKey);
-        log.push(openaiUsage(body, model, effort, kind, Date.now() - started)); logged = true;
+        const { text, body, costUsd } = await openaiChat(model, effort, system, content, apiKey);
+        log.push({ ...openaiUsage(body, model, effort, kind, Date.now() - started), ...(costUsd && { costUsd }) }); logged = true;
         return text;
       }
       // Without a per-model endpoint/key, the SDK uses ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY (magpie via npm run start:magpie).
@@ -430,29 +439,62 @@ export function cer(ref, hyp) {
   return prev[b.length] / a.length;
 }
 
-// Map each output speaker label to at most one reference name (largest shared time first), then score
-// the share of reference time whose most-overlapping output label maps to the right name, overall and per window.
+// Best one-to-one assignment maximizing total weight (Hungarian method); w[i][j] >= 0, returns column per row or -1.
+export function bestAssignment(w) {
+  const n = Math.max(w.length, w[0]?.length ?? 0), big = Math.max(0, ...w.flat());
+  const cost = Array.from({ length: n }, (_, i) => Array.from({ length: n }, (_, j) => big - (w[i]?.[j] ?? 0)));
+  const u = new Array(n + 1).fill(0), v = new Array(n + 1).fill(0), p = new Array(n + 1).fill(0), way = new Array(n + 1).fill(0);
+  for (let i = 1; i <= n; i++) {
+    p[0] = i;
+    let j0 = 0;
+    const minv = new Array(n + 1).fill(Infinity), used = new Array(n + 1).fill(false);
+    do {
+      used[j0] = true;
+      const i0 = p[j0];
+      let delta = Infinity, j1 = 0;
+      for (let j = 1; j <= n; j++) {
+        if (used[j]) continue;
+        const cur = cost[i0 - 1][j - 1] - u[i0] - v[j];
+        if (cur < minv[j]) { minv[j] = cur; way[j] = j0; }
+        if (minv[j] < delta) { delta = minv[j]; j1 = j; }
+      }
+      for (let j = 0; j <= n; j++) if (used[j]) { u[p[j]] += delta; v[j] -= delta; } else minv[j] -= delta;
+      j0 = j1;
+    } while (p[j0] !== 0);
+    do { const j1 = way[j0]; p[j0] = p[j1]; j0 = j1; } while (j0);
+  }
+  const col = new Array(w.length).fill(-1);
+  for (let j = 1; j <= n; j++) if (p[j] && p[j] <= w.length && j <= (w[0]?.length ?? 0) && w[p[j] - 1][j - 1] > 0) col[p[j] - 1] = j - 1;
+  return col;
+}
+
+// Speaker accuracy over time. Output labels and reference names are paired one-to-one to maximize shared time;
+// only time where an output segment actually overlaps a reference segment with the paired name counts as correct.
+// Reference time no output covers is reported as missed. Overlaps are split at window boundaries (default 15 minutes).
 export function speakerAccuracy(ref, hyp, windowSec = 900) {
-  const overlap = (x, y) => Math.max(0, Math.min(x.end, y.end) - Math.max(x.start, y.start));
-  const shared = new Map();
+  const labels = [...new Set(hyp.map(h => String(h.speaker)))], names = [...new Set(ref.map(r => r.speaker))];
+  const pieces = []; // [start, end, label, name] for every output/reference overlap
   for (const r of ref) for (const h of hyp) {
-    const o = overlap(r, h);
-    if (o > 0) shared.set(`${h.speaker}\u0000${r.speaker}`, (shared.get(`${h.speaker}\u0000${r.speaker}`) ?? 0) + o);
+    const a = Math.max(r.start, h.start), b = Math.min(r.end, h.end);
+    if (b > a) pieces.push([a, b, String(h.speaker), r.speaker]);
   }
-  const map = new Map(), usedNames = new Set();
-  for (const [k] of [...shared].sort((x, y) => y[1] - x[1])) {
-    const [label, name] = k.split('\u0000');
-    if (!map.has(label) && !usedNames.has(name)) { map.set(label, name); usedNames.add(name); }
-  }
-  const total = { ok: 0, all: 0 }, windows = [];
-  for (const r of ref) {
-    const dur = r.end - r.start, best = hyp.reduce((b, h) => (overlap(r, h) > (b ? overlap(r, b) : 0) ? h : b), null);
-    const ok = best && map.get(String(best.speaker)) === r.speaker ? dur : 0, w = Math.floor(r.start / windowSec);
-    windows[w] ??= { ok: 0, all: 0 };
-    total.ok += ok; total.all += dur; windows[w].ok += ok; windows[w].all += dur;
-  }
-  const pct = x => (x?.all ? Math.round((x.ok / x.all) * 1000) / 10 : null);
-  return { accuracy: pct(total), windows: [...windows].map(pct), labels: new Set(hyp.map(h => h.speaker)).size, refSpeakers: new Set(ref.map(r => r.speaker)).size };
+  const shared = labels.map(l => names.map(n => pieces.filter(x => x[2] === l && x[3] === n).reduce((t, x) => t + x[1] - x[0], 0)));
+  const pair = new Map(bestAssignment(shared).map((j, i) => [labels[i], j >= 0 ? names[j] : null]));
+  // Add [a, b) to per-window totals, splitting at window boundaries.
+  const win = [], add = (a, b, key) => {
+    for (let s = a; s < b;) {
+      const w = Math.floor(s / windowSec), e = Math.min(b, (w + 1) * windowSec);
+      win[w] ??= { ok: 0, all: 0, covered: 0 };
+      win[w][key] += e - s;
+      s = e;
+    }
+  };
+  for (const r of ref) add(r.start, r.end, 'all');
+  for (const [a, b, label, name] of pieces) { add(a, b, 'covered'); if (pair.get(label) === name) add(a, b, 'ok'); }
+  const sum = k => win.reduce((t, x) => t + (x?.[k] ?? 0), 0), pct = (x, y) => (y ? Math.round((x / y) * 1000) / 10 : null);
+  const all = sum('all');
+  return { accuracy: pct(sum('ok'), all), windows: [...win].map(x => pct(x?.ok ?? 0, x?.all ?? 0)),
+    missed: pct(Math.max(0, all - Math.min(all, sum('covered'))), all), labels: labels.length, refSpeakers: names.length };
 }
 
 // Reference terms found in the output, counted per occurrence (case-insensitive).
@@ -481,7 +523,11 @@ async function runBench(userId) {
     } catch (e) { cases.push({ meetingId: c.meetingId, error: String(e.message ?? e).slice(0, 200) }); }
   }
   const ok = cases.filter(c => !c.error), avg = f => (ok.length ? Math.round((ok.reduce((a, c) => a + (c[f] ?? 0), 0) / ok.length) * 10) / 10 : null);
-  const run = { startedAt, finishedAt: nowIso(), by: userId, version: pkg.version, teamTerms: (await teamTerms()).length, cases,
+  const terms = await teamTerms(), corr = viaEnv(ai.pickFor(await aiStore.read(), 'correct').model);
+  // What produced these numbers, so a change in score can be traced to a change in setup.
+  const fingerprint = { transcribe: 'microsoft/mai-transcribe-2', correct: `${corr.provider}:${corr.model}`, llmRoute: process.env.LLM_PROVIDER === 'openai' ? 'openai-env' : 'per-model',
+    terms: createHash('sha256').update([...terms].sort().join('\n')).digest('hex').slice(0, 8) };
+  const run = { startedAt, finishedAt: nowIso(), by: userId, version: pkg.version, teamTerms: terms.length, fingerprint, cases,
     speakerAccuracy: avg('accuracy'), cer: avg('cer'), costUsd: log.reduce((a, e) => a + (e.costUsd ?? 0), 0), ms: log.reduce((a, e) => a + (e.ms ?? 0), 0) };
   await learned.mutate(d => { d.bench.runs = [...d.bench.runs, run].slice(-50); delete d.bench.running; });
   return run;
@@ -719,7 +765,7 @@ const cleanAgentId = v => String(v ?? '').replace(/[^\w-]/g, '').slice(0, 40);
 // Admin view of the AI settings: each model says whether a key is stored for its endpoint, never the key itself.
 async function withKeyStatus(cfg) {
   const { keys } = await secrets.read();
-  return { ...cfg, models: cfg.models.map(m => {
+  return { ...cfg, viaOpenAI: process.env.LLM_PROVIDER === 'openai' ? openaiBase({}) : '', models: cfg.models.map(m => {
     const k = keys[keyScope(m)];
     return { ...m, keyStatus: k ? { set: true, last4: k.key.slice(-4), setAt: k.setAt } : { set: false } };
   }) };
@@ -734,7 +780,7 @@ async function testModel(id) {
     const reply = await llm('你是連線測試。', '請只回答 OK。', { model: { ...model, maxOutput: 2048 }, effort: 'low', log, kind: 'test' });
     test = { ok: true, reply: reply.slice(0, 40) };
   } catch (e) { test = { ok: false, error: String(e.message).slice(0, 300) }; }
-  test.usage = log[0] ?? null;
+  test.usage = log.at(-1) ?? null; // the last attempt; earlier ones may be retried failures
   Object.assign(test, { at: nowIso(), latencyMs: Date.now() - started });
   await aiStore.mutate(d => { Object.assign(d, ai.withBuiltins(d)); d.models.find(m => m.id === id).test = test; });
   return test;
@@ -868,8 +914,9 @@ async function accountRoute(req, res, url, user) {
     }
     // Model IDs the endpoint offers (OpenAI-compatible GET /models), so admins pick instead of typing.
     if (a === 'ai' && b === 'models' && c && d === 'list' && req.method === 'POST') {
-      const model = ai.withBuiltins(await aiStore.read()).models.find(m => m.id === c);
-      need(model, 404, '模型不存在');
+      const found = ai.withBuiltins(await aiStore.read()).models.find(m => m.id === c);
+      need(found, 404, '模型不存在');
+      const model = viaEnv(found);
       need(model.provider === 'openai', 400, '只有 OpenAI 相容端點能讀取模型清單');
       const base = openaiBase(model), apiKey = await apiKeyFor(model);
       need(base, 400, '沒有設定 Endpoint（或環境變數 OPENAI_BASE_URL）');

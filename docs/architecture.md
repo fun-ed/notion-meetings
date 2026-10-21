@@ -132,6 +132,8 @@ summarizing：summarize() 與 suggestSpeakers() 同時執行；建議失敗不�
 
 `ai.json` 的 `uses` 沒設定時，校對與講者建議用預設模型。
 
+`LLM_PROVIDER=openai`（`npm run start:litellm`，D-022）時，`viaEnv()` 會把 `provider: anthropic` 而且沒有自己 Endpoint 的模型改走 `OPENAI_BASE_URL`。LiteLLM 回應的 `x-litellm-response-cost` 記成 `usage[].costUsd`。
+
 ## 外部相依與設定
 
 | 項目 | 設定方式 |
