@@ -132,7 +132,7 @@
   .tabs { display:flex; gap:2px; margin:10px 0 8px; }
   .tabs .tab { border:0; background:none; color:var(--muted); padding:3px 10px; border-radius:6px; }
   .tabs .tab.on { background:var(--hover); color:var(--fg); font-weight:600; }
-  .ai-foot { display:flex; gap:10px; align-items:center; flex-wrap:wrap; border-top:1px solid var(--line); margin-top:12px; padding-top:10px; }
+  .ai-foot { display:flex; gap:10px; align-items:center; flex-wrap:wrap; border-bottom:1px solid var(--line); margin-bottom:12px; padding-bottom:10px; }
   .ai-foot details { width:100%; }
   .ai-foot textarea, .notes { width:100%; border:1px solid var(--line); border-radius:6px; padding:6px 8px; min-height:70px; }
   .notes { border:0; outline:none; min-height:160px; padding:4px 0; resize:vertical; }
@@ -933,7 +933,6 @@ function render(m) {
       </div>
       <div class="tabs" role="tablist">${[['summary', '摘要'], ['notes', '筆記'], ['transcript', '逐字稿']].map(([k, t]) =>
         `<button class="tab ${tab === k ? 'on' : ''}" role="tab" aria-selected="${tab === k}" onclick="setTab('${k}')">${t}</button>`).join('')}</div>
-      ${bodies[tab]}
       ${tab === 'summary' ? `<div class="ai-foot">
         <label class="muted">指示 <select id="tpl">${Object.entries(TYPES).map(([v, [t]]) => `<option value="${v}" ${m.template === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
         <label class="muted">語言 <select id="outLang">${[['', '與逐字稿相同'], ['繁體中文（台灣）', '繁體中文'], ['English', 'English'], ['日本語', '日本語'], ['简体中文', '简体中文'], ['한국어', '한국어']]
@@ -944,6 +943,7 @@ function render(m) {
         <details ${m.instructions ? 'open' : ''}><summary class="muted">自訂指示</summary>
           <textarea id="instr" placeholder="例如：列出所有提到的數字與截止日">${esc(m.instructions)}</textarea></details>
       </div>` : ''}
+      ${bodies[tab]}
     </div>
     <h2 class="h2">✅ Action Items</h2>
     ${staleNote}${m.actions.map((a, i) => todo(m, a, i, esc(a.text), tag([a.owner || '未指定', 'purple']) + (a.team ? teamLink(a.team) : '') + (a.cite ? cites(`[${a.cite}]`) : ''))).join('')
