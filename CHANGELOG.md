@@ -2,7 +2,9 @@
 
 每一版列出新增內容與當時的驗證結果；版本號在 `package.json`，時間一律是台灣時間（GMT+8）。決策理由在 [docs/decisions.md](docs/decisions.md)，評測數據在 [docs/research/](docs/research/)。
 
-## 未發版
+## 0.7.0（2026-10-21）
+
+讓團隊知識自動帶入每場會議，並讓逐字稿更好讀。
 
 ### 新增
 

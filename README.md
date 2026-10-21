@@ -14,6 +14,8 @@ Releases: <https://github.com/fun-ed/notion-meetings/releases> · Changes: [CHAN
 - Transcription with MAI-Transcribe 2 through OpenRouter (zero data retention), OpenCC conversion to Taiwan wording, and a Claude pass that fixes only the terms in the meeting glossary. Unsure words are marked 【?】 and the raw output is kept.
 - Speaker correction: rename speakers, reassign one segment or a range, merge two speakers, and add participants who did not speak.
 - Learning loop: meeting terms become a team glossary applied to every transcription; Hangul or kana in a Chinese transcript is flagged 【?】; Claude suggests who each speaker is from name cues ("thanks, X"), and you apply a suggestion with one click; corrected meetings can be frozen as a benchmark to track speaker accuracy and CER.
+- Team knowledge: `data/knowledge.json` lists what your terms mean, their aliases and common mishearings, and team notes. Every agent's summary loads it as background, so acronyms are explained and misheard names are restored.
+- Tidy transcript view (on by default) hides filler sounds such as 呃 and 嗯 without changing the stored transcript.
 - Summaries from configurable agents (DRI handover, architecture, EKS upgrade, CI/CD, design reviews and others). Each point cites its transcript line.
 - Action items across meetings, grouped by meeting, team, owner or Y leader.
 - Search with Simplified/Traditional matching and filters such as `tag:`, `who:`, `team:`, `after:`.
@@ -124,7 +126,7 @@ Admins can also set an endpoint and API key per model under Admin › Models. Us
 - The server listens on `127.0.0.1` only. It has no HTTPS, so do not expose it to a network.
 - Audio goes to OpenRouter's zero-data-retention endpoint. Transcript text and agent skills go to the LLM endpoint you configure; a company LiteLLM proxy is recommended.
 - Live captions while recording are off by default. When turned on, they use only the browser's on-device speech recognition and never fall back to a cloud service.
-- `data/` is not tracked by git. Each meeting is stored in `data/<YYYY-MM-DD>/<id>/` as the original recording and `meeting.json`. The team glossary and benchmark results are in `data/learned.json` on each Mac.
+- `data/` is not tracked by git. Each meeting is stored in `data/<YYYY-MM-DD>/<id>/` as the original recording and `meeting.json`. The team glossary and benchmark results are in `data/learned.json`, and team knowledge in `data/knowledge.json`, on each Mac. Both are always loaded: the glossary into every transcription and term correction, the knowledge into every summary.
 - Passwords are hashed with scrypt. Sessions are HttpOnly cookies held in server memory, so a restart signs everyone out.
 
 ## Development

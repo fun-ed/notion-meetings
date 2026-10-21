@@ -36,4 +36,5 @@ description: Evaluate a speech-to-text model, audio LLM, or provider for notion-
 
 - 計分時會先把簡體轉成繁體，所以術語分數只代表有沒有聽對；字體問題由 OpenCC 處理。
 - 測試音檔是合成語音，術語清單就是答案，「帶術語」的分數偏樂觀。結論要用真實錄音確認。
+- 用真實錄音比較時，正式流程會合併 `data/learned.json` 的團隊術語，「帶術語」的設定要用同一份術語，並核對設定指紋。挑測試術語時，參考 `data/knowledge.json` 的常見誤聽（`aliases`）。
 - 同一個設定每次的結果會略有不同。差距在 1 到 2 個術語以內時，要重跑再下結論。

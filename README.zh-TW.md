@@ -14,6 +14,8 @@ Notion AI Meeting Notes 的本機復刻。錄音或上傳會議檔案後，會�
 - 轉錄流程：經 OpenRouter 呼叫 MAI-Transcribe 2（零資料保留），用 OpenCC 轉成台灣用詞，再由 Claude 只修正這場會議術語表裡的詞。不確定的地方標成【?】，並保留原始辨識結果。
 - 校正講者：可以改講者名字、把一段或一整段範圍改給別人、合併兩位講者，也能加入沒發言的參與者。
 - 學習迴圈：會議的術語自動累積成團隊術語，每場轉錄都會套用；中文逐字稿出現韓文或日文假名時標【?】；Claude 依點名線索（「謝謝 X」）建議講者是誰，按一下套用；校正好的會議可以凍結成 benchmark，追蹤講者正確率與 CER。
+- 團隊知識：`data/knowledge.json` 記錄術語的意思、別名與常見誤聽，以及團隊流程。不論選哪個 Agent，摘要都會帶入，所以縮寫能被解讀，聽錯的名稱也能還原。
+- 逐字稿預設精簡顯示，隱藏呃、嗯等語助詞，不改存下來的逐字稿。
 - 摘要可選 Agent，例如 DRI 交接、架構討論、EKS 升級、CI/CD、各類 design review。每個重點都標出依據的逐字稿行號。
 - 跨會議的 Action Items，可依會議、團隊、負責人或 Y leader 分組。
 - 搜尋簡繁互通，支援 `tag:`、`who:`、`team:`、`after:` 等篩選。
@@ -127,7 +129,7 @@ macOS 下載後，第一次要先執行 `xattr -d com.apple.quarantine <檔案>`
 - 伺服器只接受 `127.0.0.1` 的連線。它沒有 HTTPS，不要開放到網路上。
 - 音訊送到 OpenRouter 的零資料保留端點；逐字稿文字與 Agent 的 skill 送到你設定的 LLM 端點，建議用公司的 LiteLLM。
 - 錄音時的即時字幕預設關閉。開啟後只用瀏覽器的本機語音辨識，不會改用雲端服務。
-- `data/` 不進 git。每場會議存在 `data/<YYYY-MM-DD>/<id>/`，內容是原始錄音與 `meeting.json`。團隊術語與 benchmark 結果存在各自 Mac 的 `data/learned.json`。
+- `data/` 不進 git。每場會議存在 `data/<YYYY-MM-DD>/<id>/`，內容是原始錄音與 `meeting.json`。團隊術語與 benchmark 結果存在各自 Mac 的 `data/learned.json`，團隊知識存在 `data/knowledge.json`。兩者一律載入：團隊術語用在每次轉錄與術語校對，團隊知識用在每次摘要。
 - 密碼用 scrypt 雜湊。登入狀態是 HttpOnly cookie，存在伺服器記憶體，重新啟動後要重新登入。
 
 ## 開發

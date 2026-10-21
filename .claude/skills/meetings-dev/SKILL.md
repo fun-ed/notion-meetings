@@ -35,6 +35,7 @@ description: Develop, fix, or maintain the notion-meetings app (server.js routes
 - 帳號、名錄、模型設定都在 `data/`（不進 git）；真實名單與錄音不能出現在 repo 或截圖裡。
 - 摘要一律保留必備段落與 `- [ ] 事項 — 負責人 [n]` 格式，Agent 提示只能增加段落，否則 Action Items 解析不到。
 - 學習迴圈（D-020）：只學使用者確認過的內容。講者建議只是建議，程式不能自動改名；候選名字只能來自參與者、名錄人員與 Y leader。轉錄流程一律走 `transcribeClean()`，正式處理與 benchmark 共用同一份程式；`data/learned.json` 只能經 `learned.mutate()` 修改。
+- 團隊知識一律載入：`data/learned.json` 的團隊術語進每次轉錄（MAI phraseList）與術語校對；`data/knowledge.json`（D-024，手動編輯、不進 git）的術語意思、別名與常見誤聽、流程筆記，進每個 Agent 的摘要 system prompt，標明是背景知識、不是會議內容。處理會議內容、術語或摘要問題前，先讀這兩個檔；它們是內部資料，不能進 repo、測試或截圖。
 - 改到轉錄、術語、校對或講者建議時，除了 `eval/e2e.py`，若有凍結的 benchmark 會議，也要在管理後台執行一次 benchmark，分數不能下降。比較分數前，先看每次執行的設定指紋（轉錄模型、校對模型、術語雜湊）是否相同。
 - Benchmark 的講者正確率只計實際重疊而且配對正確的時間，配對用匈牙利演算法（`bestAssignment()`），跨 15 分鐘邊界的發言要切開。時間軸要切成互不重疊的時間片，重疊或重複的輸出片段只能算一次。改 `speakerAccuracy()` 時，`server.test.js` 裡的「1 秒覆蓋 10 秒＝10%」「跨視窗」「最佳配對 61.1%」「兩個標籤重疊＝50%、漏 50%」「重複片段不超過 100%」都要通過。
 - 新的評測結果（模型、端點、組合）要加進 `docs/research/2026-10-21-benchmark-standards.md` 的準確度總表；README 的模型搭配表也要跟著更新。
@@ -102,7 +103,8 @@ description: Develop, fix, or maintain the notion-meetings app (server.js routes
 | Agent 的 skill 載入失敗 | 路徑必須是 `.md`、檔案存在；URL 要在 5 秒內回應 |
 | 校對或摘要失敗、連線被拒 | magpie 有沒有開：`curl -s http://127.0.0.1:3425/v1/models -H 'Authorization: Bearer magpie'` |
 | 逐字稿是簡體 | 會議的 `lang` 是不是 `zh-CN`，或自動偵測沒判斷成中文 |
-| 術語沒有被修正 | 這場會議的 `glossary` 有沒有內容；改完術語要按「用目前的術語重新轉錄」 |
+| 術語沒有被修正 | 這場會議的 `glossary`（📖 術語欄，不是「摘要」欄）與 `data/learned.json` 的團隊術語有沒有內容；改完術語要勾「重新轉錄」再產生摘要 |
+| 摘要不認得團隊縮寫或誤聽 | `data/knowledge.json` 是否存在、JSON 是否有效（壞檔時終端機印警告）；每次摘要都重讀，不必重啟 |
 | `ffmpeg` 錯誤 | `which ffmpeg`；上傳檔可能損壞 |
 
 換轉錄模型或服務商前，先用 `stt-research` skill 評測。
