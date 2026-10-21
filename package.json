@@ -1,6 +1,6 @@
 {
   "name": "notion-meetings",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "repository": "https://github.com/fun-ed/notion-meetings",
   "private": true,
   "type": "module",

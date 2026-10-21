@@ -56,13 +56,13 @@ summarizing：summarize() 與 suggestSpeakers() 同時執行；建議失敗不�
   - 結果存進 `meeting.speakerHints`，介面按「套用」才會改名。
 - **Benchmark**：
   - 擁有者凍結時，在會議資料夾寫 `reference.json`（講者名字與去掉【?】的文字），並在會議記 `benchmarkAt`。
-  - 管理員執行時，`runBench()` 對每個案例跑 `transcribeClean()`，再用 `benchMetrics()` 算指標，結果寫進 `bench.runs`（保留最近 50 次），每次附上 `fingerprint`：轉錄模型、校對模型與路徑、團隊術語的 SHA-256 前 8 碼。會議本身不會被改動。
+  - 管理員執行時，`runBench()` 對每個案例跑 `transcribeClean()`，再用 `benchMetrics()` 算指標，結果寫進 `bench.runs`（保留最近 50 次）。整體的講者正確率與 CER 依各場參考語音的時長加權（0.6.1 起）。每次執行附上 `fingerprint`：轉錄模型、校對模型與 effort、路徑（`llmRoute`）、端點主機的雜湊、校對提示的雜湊、團隊術語的雜湊；每一場另記會議術語的雜湊。只存雜湊，不存 key 或完整網址。會議本身不會被改動。
   - 指標：
-    - 講者正確率（`speakerAccuracy()`，0.6.0 修正）：
+    - 講者正確率（`speakerAccuracy()`，0.6.0、0.6.1 修正）：
+      - 時間軸在每個片段與視窗的邊界切成互不重疊的時間片，所以重疊或重複的輸出片段只算一次。
+      - 每個時間片裡，每位正在說話的參考講者都計入時長：有任何和他配對的輸出標籤正在作用就算正確；完全沒有輸出時算漏掉（`missed`）。
       - 輸出標籤與參考名字用匈牙利演算法（`bestAssignment()`）一對一配對，取總共同時間最大的組合。
-      - 只計輸出與參考實際重疊、而且配對正確的時間，再除以參考總時長。
-      - 另外列出漏掉的語音比例（`missed`）。
-      - 每 15 分鐘一個視窗，跨邊界的發言切開計算。
+      - 正確率不會超過 100%。每 15 分鐘一個視窗；也回傳參考語音時長（`refSeconds`）。
     - CER：去空白標點、簡繁統一後計算。
     - 術語命中、【?】數量。
 
@@ -127,7 +127,9 @@ summarizing：summarize() 與 suggestSpeakers() 同時執行；建議失敗不�
 - `openai`：用 `fetch` 呼叫 `{endpoint}/chat/completions`，送 `max_completion_tokens` 與 `reasoning_effort`（xhigh、max 先對應到 high）。拒答、`content_filter`、`length` 都轉成明確的錯誤。用量由 `openaiUsage()` 換算：快取的 prompt tokens 記成 `cacheReadTokens`。
 - `anthropic`：原本的 Anthropic SDK 呼叫（beta stream、server-side fallbacks）。
 
-暫時性錯誤會自動重試 2 次，間隔 2 秒與 8 秒，判斷由 `isTransient()` 負責：408、409、429、5xx、529，以及串流截斷、連線重設。每次失敗都記進 `usage`（帶 `error`）。
+暫時性錯誤會自動重試 2 次，間隔 2 秒與 8 秒（`RETRY.delays`，測試會縮短），判斷由 `isTransient()` 負責：408、409、429、5xx、529，以及串流截斷、連線重設。空的回應內容也視為暫時性錯誤（0.6.1 起），不會讓會議在摘要空白時顯示完成。每次失敗都記進 `usage`（帶 `error`）。
+
+`apiKeyFor()` 的順序：`LLM_PROVIDER=openai` 而且模型沒有自己的 Endpoint 時，一律用啟動時的 `OPENAI_API_KEY`（0.6.1 起，避免把後台存過的舊 key 送到 LiteLLM）；其他情況依序是模型指定的環境變數、後台存的 key、`OPENAI_API_KEY`。
 
 用到的模型：
 - 術語校對：`pickFor(cfg, 'correct')`。

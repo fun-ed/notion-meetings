@@ -2,6 +2,27 @@
 
 每一版列出新增內容與當時的驗證結果；版本號在 `package.json`，時間一律是台灣時間（GMT+8）。決策理由在 [docs/decisions.md](docs/decisions.md)，評測數據在 [docs/research/](docs/research/)。
 
+## 0.6.1（2026-10-21）
+
+依 v0.6.0 的外部 review 修正（[docs/plans/2026-10-21-next-steps.md](docs/plans/2026-10-21-next-steps.md)）。
+
+### 修正
+
+- **重疊的輸出片段被重複計算**：兩個標籤蓋同樣 5 秒時，漏掉的語音算成 0%（應為 50%）；同一個標籤重複兩段時，正確率算成 200%。改成先把時間軸切成互不重疊的時間片再累加，正確率不會超過 100%。
+- **`start:litellm` 可能沿用舊 key**：後台曾替「沒填 Endpoint 的 OpenAI 模型」存過 key 時，會把那把 key 送到公司 LiteLLM。現在 `LLM_PROVIDER=openai` 而且模型沒有自己的 Endpoint 時，一律用啟動時的 key。
+- **空的 LLM 回應被當成成功**：OpenAI 相容端點回傳空內容或沒有 `choices` 時，摘要會空白卻顯示完成。現在空回應視為暫時性錯誤並重試，最後仍失敗就讓會議顯示失敗；Anthropic 路徑也一樣。
+
+### 新增
+
+- **benchmark 整體分數依時長加權**：各場的講者正確率與 CER 依參考語音時長加權，長會議的份量較重。
+- **更完整的設定指紋**：加入校對的 effort、端點主機雜湊、校對提示雜湊、每場會議術語雜湊；只存雜湊，不存 key 或完整網址。
+- **GitHub Actions（手動觸發）**：在 Actions 頁面按 Run workflow，或執行 `gh workflow run ci.yml`。會跑單元測試、用 Bun 1.4.3 建置 5 個平台、核對 `SHA256SUMS`，並實際啟動 Linux x64 執行檔確認版本與內嵌介面。推送時不會自動執行；不放任何憑證，真 API 的回歸測試仍在本機手動執行。
+
+### 驗證
+
+- `npm test` 21 項全過。新增：重疊與重複片段的計分、`start:litellm` 的金鑰順序、空回應的重試（先 503、再空內容、第三次成功）。測試的重試間隔縮短，整體從約 2 秒變成 0.7 秒。
+- 執行檔：5 個平台用官方 Bun 1.4.3 建置；`scripts/smoke-binary.sh` 測 macOS arm64，三行 PASS（乾淨 45/45、嚴苛 42/45、講者 9/9）。其他 4 個平台沒有實際執行；CI 的 Linux x64 啟動檢查要手動觸發後才會跑。
+
 ## 0.6.0（2026-10-21）
 
 公司 LiteLLM 實測與一鍵切換（D-022，報告見 [docs/research/2026-10-21-litellm.md](docs/research/2026-10-21-litellm.md)）。

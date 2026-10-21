@@ -229,7 +229,9 @@ export const openaiUsage = (body, model, effort, kind, ms) => {
 // They are never sent back to the browser; only "set, ends with 1234" is.
 const secrets = auth.jsonStore(path.join(DATA, 'secrets.json'), () => ({ keys: {} }));
 export const keyScope = m => m.baseURL || (m.provider === 'openai' ? 'env:OPENAI_BASE_URL' : 'env:ANTHROPIC_BASE_URL');
-async function apiKeyFor(model) {
+export async function apiKeyFor(model) {
+  // npm run start:litellm: models without their own endpoint use the key it was launched with, never a stored or per-model one.
+  if (process.env.LLM_PROVIDER === 'openai' && model.provider === 'openai' && !model.baseURL) return process.env.OPENAI_API_KEY;
   if (model.apiKeyEnv) {
     if (!process.env[model.apiKeyEnv]) throw fail(400, `環境變數 ${model.apiKeyEnv} 未設定`);
     return process.env[model.apiKeyEnv];
@@ -255,6 +257,7 @@ async function openaiChat(model, effort, system, content, apiKey) {
   const choice = body.choices?.[0];
   if (choice?.message?.refusal || choice?.finish_reason === 'content_filter') throw new Error(`${model.label} 拒絕處理這段內容`);
   if (choice?.finish_reason === 'length') throw new Error(`${model.label} 的輸出超過上限，請在管理後台提高輸出上限`);
+  if (!String(choice?.message?.content ?? '').trim()) throw Object.assign(new Error(`${model.label} 回傳空的內容`), { upstream: 502 });
   // LiteLLM reports the real cost of the call in a header.
   return { text: choice?.message?.content ?? '', body, costUsd: Number(res.headers.get('x-litellm-response-cost')) || 0 };
 }
@@ -262,7 +265,7 @@ async function openaiChat(model, effort, system, content, apiKey) {
 // Upstream hiccups (rate limits, 5xx, a stream cut short) are retried; bad requests and refusals are not.
 export const isTransient = e => [408, 409, 429, 500, 502, 503, 504, 529].includes(e?.upstream ?? e?.status)
   || /cut short|overloaded|ECONNRESET|socket hang up|fetch failed|terminated/i.test(String(e?.message));
-const RETRY_DELAYS = [2000, 8000];
+export const RETRY = { delays: [2000, 8000] }; // tests shorten these
 
 // Call the model's provider; every attempt, failed or not, is recorded in `log`.
 // LLM_PROVIDER=openai (npm run start:litellm) sends every model without its own endpoint through the OpenAI-compatible
@@ -299,11 +302,13 @@ async function llm(system, content, opts = {}) {
       }).finalMessage();
       log.push(usageOf(msg, model, effort, kind, Date.now() - started)); logged = true;
       if (msg.stop_reason === 'refusal') throw Object.assign(new Error('Claude 拒絕處理這段內容'), { final: true });
-      return msg.content.filter(b => b.type === 'text').map(b => b.text).join('');
+      const text = msg.content.filter(b => b.type === 'text').map(b => b.text).join('');
+      if (!text.trim()) { log.at(-1).error = '回傳空的內容'; throw Object.assign(new Error(`${model.label} 回傳空的內容`), { upstream: 502 }); }
+      return text;
     } catch (e) {
       if (!logged) log.push({ kind, provider: model.provider, model: model.model, label: model.label, effort, ms: Date.now() - started, at: nowIso(), error: String(e.message).slice(0, 200) });
-      if (e.final || attempt >= RETRY_DELAYS.length || !isTransient(e)) throw e;
-      await new Promise(r => setTimeout(r, RETRY_DELAYS[attempt]));
+      if (e.final || attempt >= RETRY.delays.length || !isTransient(e)) throw e;
+      await new Promise(r => setTimeout(r, RETRY.delays[attempt]));
     }
   }
 }
@@ -468,33 +473,34 @@ export function bestAssignment(w) {
   return col;
 }
 
-// Speaker accuracy over time. Output labels and reference names are paired one-to-one to maximize shared time;
-// only time where an output segment actually overlaps a reference segment with the paired name counts as correct.
-// Reference time no output covers is reported as missed. Overlaps are split at window boundaries (default 15 minutes).
+// Speaker accuracy over time. The timeline is cut into slices at every segment and window boundary, so overlapping or
+// duplicated segments count once. In each slice every active reference speaker counts its duration; it is correct when an
+// active output label is paired with that speaker, and missed when no output label is active. Labels and names are paired
+// one-to-one (Hungarian method) to maximize shared time. Windows default to 15 minutes.
 export function speakerAccuracy(ref, hyp, windowSec = 900) {
   const labels = [...new Set(hyp.map(h => String(h.speaker)))], names = [...new Set(ref.map(r => r.speaker))];
-  const pieces = []; // [start, end, label, name] for every output/reference overlap
-  for (const r of ref) for (const h of hyp) {
-    const a = Math.max(r.start, h.start), b = Math.min(r.end, h.end);
-    if (b > a) pieces.push([a, b, String(h.speaker), r.speaker]);
+  const end = Math.max(0, ...ref.map(r => r.end), ...hyp.map(h => h.end));
+  const cuts = [...new Set([...ref, ...hyp].flatMap(x => [x.start, x.end])
+    .concat(Array.from({ length: Math.floor(end / windowSec) + 1 }, (_, i) => i * windowSec)))].sort((a, b) => a - b);
+  const slices = [];
+  for (let i = 0; i + 1 < cuts.length; i++) {
+    const [a, b] = [cuts[i], cuts[i + 1]], mid = (a + b) / 2;
+    const R = new Set(ref.filter(r => r.start <= mid && mid < r.end).map(r => r.speaker));
+    if (R.size) slices.push({ a, b, R, H: new Set(hyp.filter(h => h.start <= mid && mid < h.end).map(h => String(h.speaker))) });
   }
-  const shared = labels.map(l => names.map(n => pieces.filter(x => x[2] === l && x[3] === n).reduce((t, x) => t + x[1] - x[0], 0)));
-  const pair = new Map(bestAssignment(shared).map((j, i) => [labels[i], j >= 0 ? names[j] : null]));
-  // Add [a, b) to per-window totals, splitting at window boundaries.
-  const win = [], add = (a, b, key) => {
-    for (let s = a; s < b;) {
-      const w = Math.floor(s / windowSec), e = Math.min(b, (w + 1) * windowSec);
-      win[w] ??= { ok: 0, all: 0, covered: 0 };
-      win[w][key] += e - s;
-      s = e;
-    }
-  };
-  for (const r of ref) add(r.start, r.end, 'all');
-  for (const [a, b, label, name] of pieces) { add(a, b, 'covered'); if (pair.get(label) === name) add(a, b, 'ok'); }
+  const shared = labels.map(l => names.map(n => slices.reduce((t, x) => t + (x.H.has(l) && x.R.has(n) ? x.b - x.a : 0), 0)));
+  const named = new Map(bestAssignment(shared).map((j, i) => [labels[i], j >= 0 ? names[j] : null]));
+  const win = [];
+  for (const { a, b, R, H } of slices) {
+    const w = (win[Math.floor(a / windowSec)] ??= { ok: 0, all: 0, covered: 0 }), d = b - a, hit = new Set([...H].map(l => named.get(l)));
+    w.all += R.size * d;
+    if (H.size) w.covered += R.size * d;
+    w.ok += [...R].filter(n => hit.has(n)).length * d;
+  }
   const sum = k => win.reduce((t, x) => t + (x?.[k] ?? 0), 0), pct = (x, y) => (y ? Math.round((x / y) * 1000) / 10 : null);
   const all = sum('all');
-  return { accuracy: pct(sum('ok'), all), windows: [...win].map(x => pct(x?.ok ?? 0, x?.all ?? 0)),
-    missed: pct(Math.max(0, all - Math.min(all, sum('covered'))), all), labels: labels.length, refSpeakers: names.length };
+  return { accuracy: pct(sum('ok'), all), windows: [...win].map(x => pct(x?.ok ?? 0, x?.all ?? 0)), missed: pct(all - sum('covered'), all),
+    labels: labels.length, refSpeakers: names.length, refSeconds: Math.round(all * 10) / 10 };
 }
 
 // Reference terms found in the output, counted per occurrence (case-insensitive).
@@ -511,6 +517,10 @@ export function benchMetrics(refSegs, hypSegs, terms) {
     terms: termHits(refText, hypText, terms), unsure: (hypText.match(/【\?】/g) ?? []).length };
 }
 
+const shortHash = v => createHash('sha256').update(String(v)).digest('hex').slice(0, 8);
+// The host a model is called on (for fingerprints): its own endpoint, else the environment default for its provider.
+const endpointHost = m => { try { return new URL(m.provider === 'openai' ? openaiBase(m) : m.baseURL || process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').host; } catch { return 'unset'; } };
+
 // Re-run the current pipeline on every frozen case; meetings themselves are not modified.
 async function runBench(userId) {
   const startedAt = nowIso(), log = [], cases = [];
@@ -519,16 +529,20 @@ async function runBench(userId) {
     try {
       const m = await load(c.meetingId), ref = JSON.parse(await fsp.readFile(path.join(dir(c.meetingId), 'reference.json'), 'utf8'));
       const { segments } = await transcribeClean({ ...m, glossary: ref.glossary }, log);
-      cases.push({ meetingId: c.meetingId, title: m.title, ...benchMetrics(ref.segments, segments, await termsFor({ glossary: ref.glossary })) });
+      cases.push({ meetingId: c.meetingId, title: m.title, glossary: shortHash(ref.glossary ?? ''),
+        ...benchMetrics(ref.segments, segments, await termsFor({ glossary: ref.glossary })) });
     } catch (e) { cases.push({ meetingId: c.meetingId, error: String(e.message ?? e).slice(0, 200) }); }
   }
-  const ok = cases.filter(c => !c.error), avg = f => (ok.length ? Math.round((ok.reduce((a, c) => a + (c[f] ?? 0), 0) / ok.length) * 10) / 10 : null);
-  const terms = await teamTerms(), corr = viaEnv(ai.pickFor(await aiStore.read(), 'correct').model);
-  // What produced these numbers, so a change in score can be traced to a change in setup.
-  const fingerprint = { transcribe: 'microsoft/mai-transcribe-2', correct: `${corr.provider}:${corr.model}`, llmRoute: process.env.LLM_PROVIDER === 'openai' ? 'openai-env' : 'per-model',
-    terms: createHash('sha256').update([...terms].sort().join('\n')).digest('hex').slice(0, 8) };
-  const run = { startedAt, finishedAt: nowIso(), by: userId, version: pkg.version, teamTerms: terms.length, fingerprint, cases,
-    speakerAccuracy: avg('accuracy'), cer: avg('cer'), costUsd: log.reduce((a, e) => a + (e.costUsd ?? 0), 0), ms: log.reduce((a, e) => a + (e.ms ?? 0), 0) };
+  // Overall scores weight each meeting by its reference speech time, so a long meeting counts more than a short one.
+  const ok = cases.filter(c => !c.error), secs = ok.reduce((a, c) => a + (c.refSeconds ?? 0), 0);
+  const weighted = f => (secs ? Math.round((ok.reduce((a, c) => a + (c[f] ?? 0) * (c.refSeconds ?? 0), 0) / secs) * 10) / 10 : null);
+  const terms = await teamTerms(), picked = ai.pickFor(await aiStore.read(), 'correct'), corr = viaEnv(picked.model);
+  // What produced these numbers, so a change in score can be traced to a change in setup. Hashes only: no keys or full URLs.
+  const fingerprint = { transcribe: 'microsoft/mai-transcribe-2', correct: `${corr.provider}:${corr.model}`, effort: picked.effort,
+    endpoint: shortHash(endpointHost(corr)), llmRoute: process.env.LLM_PROVIDER === 'openai' ? 'openai-env' : 'per-model',
+    prompt: shortHash(CORRECT_SYSTEM), terms: shortHash([...terms].sort().join('\n')) };
+  const run = { startedAt, finishedAt: nowIso(), by: userId, version: pkg.version, teamTerms: terms.length, fingerprint, cases, refSeconds: Math.round(secs),
+    speakerAccuracy: weighted('accuracy'), cer: weighted('cer'), costUsd: log.reduce((a, e) => a + (e.costUsd ?? 0), 0), ms: log.reduce((a, e) => a + (e.ms ?? 0), 0) };
   await learned.mutate(d => { d.bench.runs = [...d.bench.runs, run].slice(-50); delete d.bench.running; });
   return run;
 }

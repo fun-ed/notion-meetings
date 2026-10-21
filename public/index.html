@@ -435,12 +435,12 @@ async function renderLearnAdmin(msg = '') {
       <td><input type="checkbox" aria-label="啟用 ${esc(t.term)}" ${t.enabled !== false ? 'checked' : ''} onchange="adminTerm(${esc(JSON.stringify(t.term))}, this.checked)"></td>
       <td><button class="ghost" onclick="adminTerm(${esc(JSON.stringify(t.term))}, null)">刪除</button></td></tr>`).join('') || '<tr><td colspan="5" class="muted">還沒有團隊術語</td></tr>'}</tbody></table>
     <h3>Benchmark</h3>
-    <p class="muted">在會議的逐字稿分頁校正講者後「凍結為 benchmark」。執行時用目前的設定重新轉錄每場凍結的會議（會呼叫 OpenRouter 與 Claude），不會改動會議本身。講者正確率以時間加權；CER 去掉空白與標點、簡繁統一後計算。</p>
+    <p class="muted">在會議的逐字稿分頁校正講者後「凍結為 benchmark」。執行時用目前的設定重新轉錄每場凍結的會議（會呼叫 OpenRouter 與 Claude），不會改動會議本身。講者正確率只計輸出與參考實際重疊、而且講者配對正確的時間；CER 去掉空白與標點、簡繁統一後計算。＊整體分數依各場參考語音的時長加權。設定欄的端點、提示、術語是雜湊值，用來比對兩次執行的設定是否相同。</p>
     <div class="learn-row">${d.bench.cases.length} 場凍結的會議：${d.bench.cases.map(c => `<a href="#${esc(c.meetingId)}">📄 ${esc(byId[c.meetingId]?.title ?? c.meetingId)}</a>`).join('、') || '—'}
       <button onclick="runBench()" ${d.bench.running || !d.bench.cases.length ? 'disabled' : ''}>${d.bench.running ? `⏳ 執行中（${dt(d.bench.running.startedAt)} 開始）` : '▶ 執行 benchmark'}</button>
       ${d.bench.lastError ? `<span class="err">上次失敗：${esc(d.bench.lastError)}</span>` : ''}</div>
-    <div class="scroll-x"><table class="db usage"><thead><tr><th>時間</th><th>版本</th><th>設定</th><th>講者正確率</th><th>CER</th><th>費用</th><th>耗時</th><th>各場</th></tr></thead><tbody>
-    ${[...d.bench.runs].reverse().map(r => `<tr><td>${dt(r.finishedAt)}</td><td>${esc(r.version)}</td><td>${r.fingerprint ? `校對 ${esc(r.fingerprint.correct)}<br>術語 ${r.teamTerms} 個（${esc(r.fingerprint.terms)}）` : `術語 ${r.teamTerms} 個`}</td><td>${pct(r.speakerAccuracy)}</td><td>${pct(r.cer)}</td>
+    <div class="scroll-x"><table class="db usage"><thead><tr><th>時間</th><th>版本</th><th>設定</th><th>講者正確率＊</th><th>CER＊</th><th>費用</th><th>耗時</th><th>各場</th></tr></thead><tbody>
+    ${[...d.bench.runs].reverse().map(r => `<tr><td>${dt(r.finishedAt)}</td><td>${esc(r.version)}</td><td>${r.fingerprint ? `校對 ${esc(r.fingerprint.correct)}${r.fingerprint.effort ? `（${esc(r.fingerprint.effort)}）` : ''}<br>${r.fingerprint.endpoint ? `端點 ${esc(r.fingerprint.endpoint)} · 提示 ${esc(r.fingerprint.prompt)}<br>` : ''}術語 ${r.teamTerms} 個（${esc(r.fingerprint.terms)}）` : `術語 ${r.teamTerms} 個`}</td><td>${pct(r.speakerAccuracy)}</td><td>${pct(r.cer)}</td>
       <td>${usd(r.costUsd)}</td><td>${secs(r.ms)}</td><td>${r.cases.map(c => c.error ? `<span class="err">${esc(c.error)}</span>`
         : `${esc(c.title)}：講者 ${pct(c.accuracy)}（每 15 分 ${c.windows.map(pct).join('／')}；漏 ${pct(c.missed)}；${c.labels}／${c.refSpeakers} 位）· CER ${pct(c.cer)} · 術語 ${c.terms.hit}/${c.terms.all} · 【?】${c.unsure}`).join('<br>')}</td></tr>`).join('')
       || '<tr><td colspan="8" class="muted">還沒有執行紀錄</td></tr>'}</tbody></table></div>`;

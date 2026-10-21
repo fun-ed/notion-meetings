@@ -1,0 +1,47 @@
+# Unit tests, cross-platform build and a Linux binary smoke test. Manual only for now:
+# Actions › ci › Run workflow, or `gh workflow run ci.yml`.
+# No credentials here: the end-to-end regression against real APIs (eval/e2e.py, scripts/smoke-binary.sh) stays local.
+name: ci
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: npm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - run: npm ci
+      - name: Build all five targets
+        run: bash scripts/build.sh
+      - name: Check SHA256SUMS
+        run: cd dist && sha256sum -c SHA256SUMS
+      - name: Smoke the Linux x64 binary (version and embedded UI)
+        run: |
+          v=$(node -p 'require("./package.json").version')
+          DATA_DIR=$(mktemp -d) PORT=3999 "./dist/notion-meetings-v$v-linux-x64" &
+          pid=$!
+          for _ in $(seq 30); do curl -sf http://localhost:3999/api/auth/me > me.json && break; sleep 1; done
+          grep -q "\"version\":\"$v\"" me.json
+          curl -sf http://localhost:3999/ | cmp - public/index.html
+          kill "$pid"

@@ -134,7 +134,7 @@ mise exec -- npm test        # unit and API tests, no external calls
 mise exec -- npm run build   # single-file binaries in dist/ (Bun)
 ```
 
-The pipeline regression test (`eval/e2e.py`) and the binary release check (`scripts/smoke-binary.sh`) call the real APIs. The steps are in the `meetings-dev` skill.
+A manually triggered GitHub Actions workflow (`gh workflow run ci.yml`) runs the unit tests, builds the five binaries, checks `SHA256SUMS` and starts the Linux x64 binary. The pipeline regression test (`eval/e2e.py`) and the binary release check (`scripts/smoke-binary.sh`) call the real APIs, so they run manually; the steps are in the `meetings-dev` skill.
 
 | Path | Contents |
 |---|---|

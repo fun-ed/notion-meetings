@@ -137,7 +137,7 @@ mise exec -- npm test        # 單元與 API 測試，不呼叫外部服務
 mise exec -- npm run build   # 用 Bun 在 dist/ 產生單一執行檔
 ```
 
-處理流程的回歸測試（`eval/e2e.py`）和執行檔的發版檢查（`scripts/smoke-binary.sh`）會呼叫真的 API，步驟寫在 `meetings-dev` skill。
+手動觸發的 GitHub Actions（`gh workflow run ci.yml`）會跑單元測試、建置 5 個平台的執行檔、核對 `SHA256SUMS`，並實際啟動 Linux x64 執行檔。處理流程的回歸測試（`eval/e2e.py`）和執行檔的發版檢查（`scripts/smoke-binary.sh`）會呼叫真的 API，所以手動執行，步驟寫在 `meetings-dev` skill。
 
 | 路徑 | 內容 |
 |---|---|

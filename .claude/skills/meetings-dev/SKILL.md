@@ -36,7 +36,7 @@ description: Develop, fix, or maintain the notion-meetings app (server.js routes
 - 摘要一律保留必備段落與 `- [ ] 事項 — 負責人 [n]` 格式，Agent 提示只能增加段落，否則 Action Items 解析不到。
 - 學習迴圈（D-020）：只學使用者確認過的內容。講者建議只是建議，程式不能自動改名；候選名字只能來自參與者、名錄人員與 Y leader。轉錄流程一律走 `transcribeClean()`，正式處理與 benchmark 共用同一份程式；`data/learned.json` 只能經 `learned.mutate()` 修改。
 - 改到轉錄、術語、校對或講者建議時，除了 `eval/e2e.py`，若有凍結的 benchmark 會議，也要在管理後台執行一次 benchmark，分數不能下降。比較分數前，先看每次執行的設定指紋（轉錄模型、校對模型、術語雜湊）是否相同。
-- Benchmark 的講者正確率只計實際重疊而且配對正確的時間，配對用匈牙利演算法（`bestAssignment()`），跨 15 分鐘邊界的發言要切開。改 `speakerAccuracy()` 時，`server.test.js` 裡的「1 秒覆蓋 10 秒＝10%」「跨視窗」「最佳配對 61.1%」三個案例都要通過。
+- Benchmark 的講者正確率只計實際重疊而且配對正確的時間，配對用匈牙利演算法（`bestAssignment()`），跨 15 分鐘邊界的發言要切開。時間軸要切成互不重疊的時間片，重疊或重複的輸出片段只能算一次。改 `speakerAccuracy()` 時，`server.test.js` 裡的「1 秒覆蓋 10 秒＝10%」「跨視窗」「最佳配對 61.1%」「兩個標籤重疊＝50%、漏 50%」「重複片段不超過 100%」都要通過。
 - 新的評測結果（模型、端點、組合）要加進 `docs/research/2026-10-21-benchmark-standards.md` 的準確度總表；README 的模型搭配表也要跟著更新。
 
 ## 建置與發版
@@ -44,7 +44,7 @@ description: Develop, fix, or maintain the notion-meetings app (server.js routes
 使用者要求發版時照順序做。每一步的完成條件都要達到，才能做下一步。
 
 1. **升版與紀錄。** `package.json` 升版：功能用 minor，修正用 patch。`CHANGELOG.md` 新增「## x.y.z（日期，GMT+8）」，寫明新增內容與驗證結果。已經推送的 tag 不要移動，有問題就再升一個 patch。
-2. **原始碼測試。** `mise exec -- npm test` 全過。
+2. **原始碼測試。** `mise exec -- npm test` 全過。GitHub Actions 的 `ci` 目前只能手動觸發（使用者決定）；需要時執行 `gh workflow run ci.yml`，再用 `gh run list --workflow ci.yml --limit 1` 看結果。
 3. **確認 Bun 是正式版。** 執行 `bun --revision`。版本含 `canary` 時無法交叉編譯，會出現 `Target platform ... is not available for download`。這時改用正式版建置，而且不要改動 mise 的安裝：
 
    ```bash
