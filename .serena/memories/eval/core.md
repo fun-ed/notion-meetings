@@ -5,5 +5,5 @@
 - `stt_eval.py <dir> <audio> <tempo> <configs.json>`：tempo 乾淨 1.0、嚴苛 1.15。設定檔 `"$TERMS"` 佔位。
 - `e2e.py <base-url> <dir>`：對執行中的 App 上傳兩檔，門檻乾淨 ≥44/45、嚴苛 ≥40/45、簡體 0、`voices_separated` 3/3；未過 exit 1。
 - OpenRouter 會默默丟掉不認得的 `provider.options`（實測 `elevenlabs.keyterms`、`assemblyai.speaker_labels` 無效）→ 新參數一定比對帶/不帶的差異。
-- 分數抓不到編造：每次都要逐句讀輸出。MAI 每次結果略有差異，1–2 個術語內的差距要重跑。
+- 分數抓不到編造：每次都要逐句讀輸出。MAI 每次結果不同：嚴苛版同一程式可在 41～45 之間跳。評估校對或後處理的改動，要固定同一份 MAI 輸出（`segments[].raw` → `toTaiwan`）新舊各跑多次比較，不要只比兩次 e2e。
 - 測試集是合成語音、術語表即答案 → 分數偏樂觀。

@@ -8,7 +8,7 @@ import http from 'node:http';
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'meetings-'));
 process.env.OPENROUTER_API_KEY = ''; // never call the real API from tests
 const ai = await import('./ai.js');
-const { parseTranscription, transcriptText, extOf, toTaiwan, parseTerms, applyNumbered, parseActions, cleanMeta, parseQuery, searchMeetings, parseDirectory, resolver, usageOf, aggregateUsage, migrateLayout, reassignSpeakers, openaiUsage, isTransient, keyScope, viaEnv, apiKeyFor, llmKeyMissing, knowledgeText, RETRY, mergeTerms, flagForeignScript, cleanHints, cer, speakerAccuracy, bestAssignment, termHits, localDay, nowIso, searchMeetings: search2, server } = await import('./server.js');
+const { parseTranscription, transcriptText, extOf, toTaiwan, parseTerms, applyNumbered, keepTermEdits, aliasLines, parseActions, cleanMeta, parseQuery, searchMeetings, parseDirectory, resolver, usageOf, aggregateUsage, migrateLayout, reassignSpeakers, openaiUsage, isTransient, keyScope, viaEnv, apiKeyFor, llmKeyMissing, knowledgeText, RETRY, mergeTerms, flagForeignScript, cleanHints, cer, speakerAccuracy, bestAssignment, termHits, localDay, nowIso, searchMeetings: search2, server } = await import('./server.js');
 
 test('parseTranscription maps verbose_json segments to speaker segments', () => {
   const r = parseTranscription({ language: 'zh', segments: [
@@ -73,6 +73,29 @@ test('applyNumbered only replaces lines the model returned, in range', () => {
   const out = applyNumbered(segs, 'Sure:\n[2] B fixed【?】\n[3] extra\n[1] ');
   assert.deepEqual(out.map(s => s.text), ['a', 'B fixed【?】']);
   assert.equal(out[1].speaker, 1);
+});
+
+test('keepTermEdits keeps only edits into a glossary term or added 【?】, edit by edit', () => {
+  const terms = ['Bastion', 'cron job', 'EKS'];
+  const ok = (a, b) => assert.equal(keepTermEdits(a, b, terms), b, `${a} → ${b}`);
+  const no = (a, b) => assert.equal(keepTermEdits(a, b, terms), a, `${a} ↛ ${b}`);
+  ok('先連 Bation 再看', '先連 Bastion 再看');
+  ok('那個 clone job 掛了', '那個 cron job 掛了');
+  ok('升級 E case 叢集', '升級 EKS 叢集');
+  ok('Ba stion 上面', 'Bastion 上面');
+  ok('好像是 Postres', '好像是 Postres【?】');
+  no('好像是 OAuth', '好像是 Postgres'); // Postgres is not in the list: a guess, not a correction
+  no('先連 Bation 再看', '先連 Bastion 主機再看'); // extra word
+  no('我們明天看', '我們明天看 EKS'); // a term added out of nothing
+  no('EKS cluster 升級', 'EKS 升級'); // dropping a correct alias word
+  no('這個先不要動', '這個先暫緩【?】'); // rewording
+  no('連到 主機', '連到Bastion主機'); // a term added where only a space was
+  assert.equal(keepTermEdits('以前 Up- UpGenie 混在一起', '以前 Ops- OpsGenie 混在一起', ['OpsGenie']), '以前 Up- OpsGenie 混在一起', 'the stutter edit is reverted, the term fix kept');
+});
+
+test('aliasLines lists team-knowledge mishearings for the corrector', () => {
+  assert.equal(aliasLines({ glossary: [{ term: 'Bastion', aliases: ['Bation', 'bastian'] }, { term: 'EKS' }, { term: 'X', aliases: 'bad' }] }), 'Bation、bastian → Bastion');
+  assert.equal(aliasLines(null), '');
 });
 
 test('parseActions reads summary to-dos, owners, citations, and keeps done state', () => {

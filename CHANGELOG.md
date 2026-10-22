@@ -2,6 +2,26 @@
 
 每一版列出新增內容與當時的驗證結果；版本號在 `package.json`，時間一律是台灣時間（GMT+8）。決策理由在 [docs/decisions.md](docs/decisions.md)，評測數據在 [docs/research/](docs/research/)。
 
+## 0.8.0（2026-10-22）
+
+### 新增
+
+- **團隊知識接進轉錄與術語校對**（D-025）：`knowledge.json` 的術語進 MAI `phraseList` 與校對，別名與常見誤聽送進術語校對；會議參與者的名字進 `phraseList`。
+- **術語校對的 diff 驗證**（D-025，可靠度計畫第 4 項）：只保留改成術語與加【?】的改動，其他改動逐處還原，並在 `usage` 記 `rejected`。
+
+### 驗證
+
+- `npm test` 26 項全過。新增：diff 驗證的接受與還原情況、別名格式。
+- 三段真實會議（43～51 分鐘）實測，見 [docs/research/2026-10-22-team-knowledge-correction.md](docs/research/2026-10-22-team-knowledge-correction.md)：加上誤聽別名後，已知誤聽的殘留從 6 降到 1、從 20 降到 2。
+- `eval/e2e.py` 三次全部 PASS（乾淨 45/45；嚴苛 43、41、44/45）。同一份 MAI 輸出比較校對：舊 43、42、43，新 43、43、44。
+- 執行檔：5 個平台用官方 Bun 1.4.4 建置，`SHA256SUMS` 核對通過；`scripts/smoke-binary.sh` 測 macOS arm64，三行 PASS（啟動與內嵌介面、乾淨 45/45、嚴苛 45/45）。其他 4 個平台沒有實際執行。
+- 介面沒有改動，沒有另外做瀏覽器測試；側欄版本由 smoke 檢查的 `/api/auth/me` 涵蓋。
+
+### 文件
+
+- 新增 [團隊知識與品質引導計畫](docs/plans/2026-10-22-team-knowledge-quality.md)：團隊知識分團隊、Agent 自動建議、摘要台灣用詞檢查、術語維護流程。
+- README（英文、繁中）說明團隊知識也用在轉錄與校對；準確度總表加上 D-025 的結果。
+
 ## 0.7.1（2026-10-21）
 
 ### 修正

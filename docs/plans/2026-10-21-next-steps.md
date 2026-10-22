@@ -8,6 +8,7 @@
 | [llm-endpoints](2026-10-21-llm-endpoints.md) | LLM 與轉錄改走公司 LiteLLM、相容性清單 |
 | [reliability](2026-10-21-reliability.md) | 長會議、系統音訊、術語校對 diff 驗證 |
 | [roadmap](2026-10-20-roadmap.md) | 其他功能與定期維護 |
+| [team-knowledge-quality](2026-10-22-team-knowledge-quality.md) | 團隊知識串進轉錄與校對、分團隊、Agent 自動建議、摘要台灣用詞檢查（提案） |
 
 ## P0：下一輪
 
@@ -15,7 +16,7 @@
 |---|---|---|---|
 | 1 | 真實會議 benchmark 的參考答案：三段內部錄音校正講者後凍結，取得講者正確率與 CER 的基準，再訂門檻 | learning-loop P3 | 在介面上校正講者（可以先用講者建議預填） |
 | 2 | 公司 LiteLLM：文字模型已在 0.6.0 完成（`npm run start:litellm`）；轉錄要等 LiteLLM 加上 MAI-Transcribe 2，再用 `eval/` 驗證 | llm-endpoints、[LiteLLM 實測](../research/2026-10-21-litellm.md) | 請 LiteLLM 管理員加上 MAI-Transcribe 2 |
-| 3 | 術語校對的 diff 驗證：只接受「改成術語」與加【?】 | reliability 第 4 項 | — |
+| 3 | ~~術語校對的 diff 驗證~~：已完成（D-025） | reliability 第 4 項 | — |
 | 4 | 長會議轉錄（先整段送、失敗才切段、逾時）與錄音中途保存；轉錄改成可恢復的工作：記錄已完成的段落，伺服器重啟後接續未完成的會議 | reliability 第 2 項、roadmap 第 4 項 | 一段 30～60 分鐘的錄音 |
 
 ## P1：接著做

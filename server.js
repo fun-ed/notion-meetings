@@ -170,7 +170,7 @@ async function transcribe(m, log = []) {
   const mp3 = path.join(dir(m.id), 'transcode.mp3');
   // Normalize webm/mp4/mov uploads to small mono mp3; the original file stays as the attachment.
   await promisify(execFile)('ffmpeg', ['-y', '-loglevel', 'error', '-i', path.join(dir(m.id), m.file), '-vn', '-ac', '1', '-ar', '16000', '-b:a', '48k', mp3]);
-  const terms = await termsFor(m);
+  const terms = mergeTerms(await termsFor(m), m.participants ?? []); // names help MAI spell people, and speaker hints find them
   // shortcut: whole meeting in one base64 request; split into chunks if OpenRouter starts rejecting long meetings (413).
   const started = Date.now();
   const res = await fetch('https://openrouter.ai/api/v1/audio/transcriptions', {
@@ -327,10 +327,64 @@ const CORRECT_SYSTEM = [
   '4. 每一行都要輸出，保持 [n] 編號與行數不變；只輸出逐字稿行。',
 ].join('\n');
 
+// Team knowledge aliases (D-024) for the corrector: "Bation、bastian → Bastion".
+export const aliasLines = k => (Array.isArray(k?.glossary) ? k.glossary : [])
+  .filter(g => g?.term && Array.isArray(g.aliases) && g.aliases.length).map(g => `${g.aliases.join('、')} → ${g.term}`).join('\n');
+
+// Diff validation (reliability plan item 4): an edit stays only if it lands inside a glossary term or just adds 【?】.
+// Any other edit (rewording, dropped or invented words) is reverted; the line's valid term fixes are kept.
+const TOKENS = /【\?】|[A-Za-z0-9]+|\s+|[^]/gu;
+export function keepTermEdits(before, after, terms) {
+  if (before === after) return after;
+  const a = before.match(TOKENS) ?? [], b = after.match(TOKENS) ?? [];
+  const lcs = Array.from({ length: a.length + 1 }, () => new Int32Array(b.length + 1));
+  for (let i = a.length - 1; i >= 0; i--) for (let j = b.length - 1; j >= 0; j--) lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+  const low = after.toLowerCase(), spans = [];
+  for (const t of terms) for (let k = t.toLowerCase(), p = low.indexOf(k); k && p >= 0; p = low.indexOf(k, p + 1)) spans.push([p, p + k.length]);
+  // A replacement must sit inside a term; a pure deletion must fall strictly inside one ("Ba stion" → "Bastion").
+  const inTerm = (s, e) => spans.some(([ts, te]) => s < e ? ts <= s && e <= te : ts < s && s < te);
+  const parts = []; // unchanged tokens, or a hunk { start, end, ins: [[pos in after, token]], del }
+  for (let i = 0, j = 0, pos = 0; i < a.length || j < b.length;) {
+    if (a[i] !== undefined && a[i] === b[j]) { parts.push(b[j]); pos += b[j++].length; i++; continue; }
+    const h = { start: pos, ins: [], del: '' };
+    while ((i < a.length || j < b.length) && !(a[i] !== undefined && a[i] === b[j])) {
+      if (j < b.length && (i >= a.length || lcs[i][j + 1] >= lcs[i + 1][j])) { h.ins.push([pos, b[j]]); pos += b[j++].length; }
+      else h.del += a[i++];
+    }
+    h.end = pos;
+    // "E case" → "EKS" diffs as two hunks around a kept space; judge them as one replacement.
+    const k = parts.findLastIndex(p => typeof p !== 'string'), gap = parts.slice(k + 1).join('');
+    if (k >= 0 && !gap.trim()) { const p = parts[k]; parts.length = k + 1; Object.assign(p, { ins: [...p.ins, [p.end, gap], ...h.ins], del: p.del + gap + h.del, end: h.end }); }
+    else parts.push(h);
+  }
+  const ok = ({ start, ins, del }) => {
+    const real = ins.filter(([, t]) => t !== '【?】' && t.trim());
+    if (!real.length && !del.trim()) return true; // only 【?】 or whitespace added
+    if (real.length && !del.trim()) return false; // a term added out of nothing is invented content
+    return real.length ? inTerm(real[0][0], real.at(-1)[0] + real.at(-1)[1].length) : inTerm(start, start);
+  };
+  return parts.map(p => typeof p === 'string' ? p : ok(p) ? p.ins.map(([, t]) => t).join('') : p.del).join('');
+}
+
 // shortcut: one request for the whole transcript; batch by segments if meetings exceed the 64k output budget.
-const correctTerms = async (segments, terms, log) => applyNumbered(segments, await llm(CORRECT_SYSTEM,
-  `術語表：${terms.join('、')}\n\n<transcript>\n${segments.map((s, i) => `[${i + 1}] ${s.text}`).join('\n')}\n</transcript>`,
-  { ...ai.pickFor(await aiStore.read(), 'correct'), log, kind: 'correct' }));
+async function correctTerms(segments, terms, log) {
+  const aliases = aliasLines(await knowledge());
+  const reply = await llm(CORRECT_SYSTEM,
+    `術語表：${terms.join('、')}${aliases ? `\n\n別名與常見誤聽（團隊整理；逐字稿出現左邊的寫法而且是誤聽時，改成右邊的術語）：\n${aliases}` : ''}\n\n<transcript>\n${segments.map((s, i) => `[${i + 1}] ${s.text}`).join('\n')}\n</transcript>`,
+    { ...ai.pickFor(await aiStore.read(), 'correct'), log, kind: 'correct' });
+  let rejected = 0; // lines with at least one reverted edit
+  const out = applyNumbered(segments, reply).map((s, i) => {
+    const text = keepTermEdits(segments[i].text, s.text, terms);
+    if (text !== s.text) rejected++;
+    return { ...s, text };
+  });
+  if (rejected) {
+    const entry = log.findLast(e => e.kind === 'correct');
+    if (entry) entry.rejected = rejected;
+    console.warn(`術語校對：${rejected} 行有不是改成術語的改動，已還原那些改動`);
+  }
+  return out;
+}
 
 const SUMMARY_SYSTEM = '你是會議記錄助理。根據逐字稿產生 Markdown 會議筆記。只寫逐字稿實際出現的內容，不要推測；沒有明確負責人的待辦寫「未指定」。每個重點、決策與待辦後面用 [n] 標註依據的逐字稿行號。寫中文時一律使用台灣繁體中文與台灣慣用詞。逐字稿中標【?】的地方是辨識不確定的內容，不要當成確定事實；若內容重要，請標註「待確認」。';
 
@@ -381,7 +435,9 @@ export function mergeTerms(meetingTerms, teamTerms, max = MAX_PHRASES) {
   return [...meetingTerms, ...teamTerms].filter(t => { const k = t.toLowerCase(); return !seen.has(k) && seen.add(k); }).slice(0, max);
 }
 const teamTerms = async () => (await learned.read()).terms.filter(t => t.enabled !== false).map(t => t.term);
-const termsFor = async m => mergeTerms(parseTerms(m.glossary), await teamTerms());
+const knowledge = () => knowledgeFile.read().catch(() => ({})); // a broken file must not stop transcription
+const knowledgeTerms = async () => { const g = (await knowledge()).glossary; return Array.isArray(g) ? g.map(x => x?.term).filter(t => typeof t === 'string' && t) : []; };
+const termsFor = async m => mergeTerms(parseTerms(m.glossary), [...await teamTerms(), ...await knowledgeTerms()]);
 
 // Every term a meeting uses becomes a team term (new ones only), so later meetings get it without retyping.
 async function learnTerms(terms, source, userId) {
@@ -561,7 +617,7 @@ async function runBench(userId) {
   // What produced these numbers, so a change in score can be traced to a change in setup. Hashes only: no keys or full URLs.
   const fingerprint = { transcribe: 'microsoft/mai-transcribe-2', correct: `${corr.provider}:${corr.model}`, effort: picked.effort,
     endpoint: shortHash(endpointHost(corr)), llmRoute: process.env.LLM_PROVIDER === 'openai' ? 'openai-env' : 'per-model',
-    prompt: shortHash(CORRECT_SYSTEM), terms: shortHash([...terms].sort().join('\n')) };
+    prompt: shortHash(CORRECT_SYSTEM + aliasLines(await knowledge())), terms: shortHash([...terms].sort().join('\n')) };
   const run = { startedAt, finishedAt: nowIso(), by: userId, version: pkg.version, teamTerms: terms.length, fingerprint, cases, refSeconds: Math.round(secs),
     speakerAccuracy: weighted('accuracy'), cer: weighted('cer'), costUsd: log.reduce((a, e) => a + (e.costUsd ?? 0), 0), ms: log.reduce((a, e) => a + (e.ms ?? 0), 0) };
   await learned.mutate(d => { d.bench.runs = [...d.bench.runs, run].slice(-50); delete d.bench.running; });

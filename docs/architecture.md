@@ -20,7 +20,8 @@ server.js  create()
                   provider.zdr=true，azure.diarization，azure.phraseList（有術語時）
   （zh-TW 或自動偵測為中文）
                 → OpenCC cn→twp，每段 text 轉台灣繁體；raw 保留原文
-  correcting    （有術語時）Claude 依 [n] 逐行只修術語，不確定加【?】
+  correcting    （有術語時）Claude 依 [n] 逐行只修術語，不確定加【?】；knowledge.json 的別名與常見誤聽一起送；
+                keepTermEdits() 逐處比對，不是改成術語或加【?】的改動還原（D-025）
   summarizing   依會議的 Agent 選模型與 effort（ai.pickAI），系統提示＝基本規則＋模型附加提示＋Agent 提示＋skills；
                 先檢查 context window，再產生 Markdown 摘要（[n] 指向逐字稿行號），記錄 summaryBy
   done | error
@@ -44,8 +45,8 @@ data/learned.json（jsonStore，修改排隊執行）
   bench    {cases[{meetingId, frozenAt, frozenBy}], runs[], running?, lastError?}
 
 transcribeClean(m)：processMeeting 與 benchmark 共用
-  transcribe：phraseList＝mergeTerms(會議術語, 啟用的團隊術語)，上限 500
-  → OpenCC → correctTerms（同一份合併術語）→ flagForeignScript（中文會議裡的韓文、假名後加【?】）
+  transcribe：phraseList＝mergeTerms(會議術語, 啟用的團隊術語＋knowledge.json 的術語)＋參與者名字，上限 500
+  → OpenCC → correctTerms（同一份合併術語，不含參與者名字；附 knowledge.json 的別名）→ flagForeignScript（中文會議裡的韓文、假名後加【?】）
 summarizing：summarize() 與 suggestSpeakers() 同時執行；建議失敗不影響會議
 ```
 
@@ -56,7 +57,7 @@ summarizing：summarize() 與 suggestSpeakers() 同時執行；建議失敗不�
   - 結果存進 `meeting.speakerHints`，介面按「套用」才會改名。
 - **Benchmark**：
   - 擁有者凍結時，在會議資料夾寫 `reference.json`（講者名字與去掉【?】的文字），並在會議記 `benchmarkAt`。
-  - 管理員執行時，`runBench()` 對每個案例跑 `transcribeClean()`，再用 `benchMetrics()` 算指標，結果寫進 `bench.runs`（保留最近 50 次）。整體的講者正確率與 CER 依各場參考語音的時長加權（0.6.1 起）。每次執行附上 `fingerprint`：轉錄模型、校對模型與 effort、路徑（`llmRoute`）、端點主機的雜湊、校對提示的雜湊、團隊術語的雜湊；每一場另記會議術語的雜湊。只存雜湊，不存 key 或完整網址。會議本身不會被改動。
+  - 管理員執行時，`runBench()` 對每個案例跑 `transcribeClean()`，再用 `benchMetrics()` 算指標，結果寫進 `bench.runs`（保留最近 50 次）。整體的講者正確率與 CER 依各場參考語音的時長加權（0.6.1 起）。每次執行附上 `fingerprint`：轉錄模型、校對模型與 effort、路徑（`llmRoute`）、端點主機的雜湊、校對提示加上知識檔別名的雜湊、團隊術語的雜湊；每一場另記會議術語的雜湊。只存雜湊，不存 key 或完整網址。會議本身不會被改動。
   - 指標：
     - 講者正確率（`speakerAccuracy()`，0.6.0、0.6.1 修正）：
       - 時間軸在每個片段與視窗的邊界切成互不重疊的時間片，所以重疊或重複的輸出片段只算一次。
@@ -87,7 +88,7 @@ summarizing：summarize() 與 suggestSpeakers() 同時執行；建議失敗不�
 | `scheduledAt`, `location`, `brief`, `tags` | 使用者設定的會議時間（`YYYY-MM-DDTHH:mm`，本機時間）、地點、一句話摘要、標籤；由 `cleanMeta()` 驗證，格式不對就存成空值 |
 | `ownerId`, `access`, `grants[]` | 擁有者、其他登入者的權限（private／view／comment／edit）、分享連結授權 `{userId, perm, token}` |
 | `comments[]` | `{id, userId, name, text, seg, createdAt}` |
-| `usage[]` | 每次 AI 呼叫：`{kind: transcribe｜correct｜summary, provider, model, label, effort, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, audioSeconds, costUsd, ms, at, error?}`；一次處理的紀錄在 `processMeeting` 結束（含失敗）時寫入 |
+| `usage[]` | 每次 AI 呼叫：`{kind: transcribe｜correct｜summary, provider, model, label, effort, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, audioSeconds, costUsd, ms, at, error?, rejected?}`；`rejected` 是術語校對有改動被還原的行數（D-025）；一次處理的紀錄在 `processMeeting` 結束（含失敗）時寫入 |
 | `agentId`, `summaryBy` | 會議的 Agent；產生摘要的 Agent、模型、effort、時間 |
 | `actions[]` | `{text, owner, done, cite}`，摘要完成時由 `parseActions()` 從摘要的 `- [ ] 事項 — 負責人 [n]` 行解析；重新產生時，文字相同的待辦保留 `done`。舊會議沒有這個欄位時，讀取時才從摘要推導 |
 
@@ -195,4 +196,4 @@ summarizing：summarize() 與 suggestSpeakers() 同時執行；建議失敗不�
 | `ai.json` | 模型設定、Agent 與各用途的模型（`uses`）；缺少的內建項目在讀取時補上（`ai.withBuiltins`） |
 | `secrets.json` | 後台輸入的 LLM API key，依 Endpoint 存；權限 600，不經任何 API 回傳（D-021） |
 | `learned.json` | 團隊術語、benchmark 案例與歷次結果（D-020）；權限 600 |
-| `knowledge.json` | 團隊知識：術語的意思、別名與常見誤聽、流程筆記；手動編輯，每次摘要都帶入（D-024） |
+| `knowledge.json` | 團隊知識：術語的意思、別名與常見誤聽、流程筆記；手動編輯，每次摘要都帶入（D-024）；術語進 phraseList 與校對，別名進校對（D-025） |
