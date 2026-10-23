@@ -1,0 +1,53 @@
+<mxfile host="app.diagrams.net" version="24.7.17">
+  <diagram id="components" name="0.9.0 架構總覽">
+    <mxGraphModel dx="1100" dy="760" grid="1" gridSize="10" page="1" pageScale="1" pageWidth="1100" pageHeight="760" adaptiveColors="auto">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="title" value="notion-meetings 0.9.0｜元件與資料邊界" style="text;html=1;align=left;fontSize=22;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="40" y="40" width="980" height="40" as="geometry"/></mxCell>
+        <mxCell id="local" value="本機範圍｜伺服器僅綁 127.0.0.1，沒有 HTTPS，不可對外開放" style="swimlane;startSize=36;html=1;whiteSpace=wrap;fillColor=#f5f5f5;strokeColor=#666666;pointerEvents=0;" vertex="1" parent="1"><mxGeometry x="20" y="120" width="700" height="500" as="geometry"/></mxCell>
+        <mxCell id="browser" value="瀏覽器&#xa;public/index.html&#xa;錄音、上傳、檢視" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="local"><mxGeometry x="20" y="80" width="140" height="60" as="geometry"/></mxCell>
+        <mxCell id="server" value="server.js + auth.js&#xa;帳號、Session、權限&#xa;背景處理與 API" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="local"><mxGeometry x="380" y="80" width="140" height="60" as="geometry"/></mxCell>
+        <mxCell id="diagnostic" value="管理員 Web／CLI&#xa;debugTranscription()&#xa;金鑰、ffmpeg、短音訊" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="local"><mxGeometry x="20" y="200" width="140" height="60" as="geometry"/></mxCell>
+        <mxCell id="data" value="DATA_DIR（不進 Git）&#xa;錄音、meeting.json&#xa;帳號、知識、模型設定" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="local"><mxGeometry x="380" y="320" width="140" height="80" as="geometry"/></mxCell>
+        <mxCell id="router" value="OpenRouter → MAI／Azure&#xa;音訊強制 ZDR、分講者&#xa;phraseList 最多 200 個" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=12;" vertex="1" parent="1"><mxGeometry x="800" y="440" width="220" height="80" as="geometry"/></mxCell>
+        <mxCell id="llm" value="使用者設定的 LLM 端點&#xa;magpie／公司 LiteLLM 等&#xa;只接收文字與背景知識" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=12;" vertex="1" parent="1"><mxGeometry x="800" y="200" width="220" height="80" as="geometry"/></mxCell>
+        <mxCell id="a1" value="登入／會議 API" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=page;" edge="1" source="browser" target="server" parent="local"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="a2" value="讀取／排隊 update()" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;startArrow=classic;defaultLabelBackgroundColor=page;" edge="1" source="server" target="data" parent="local"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="a3" value="共用轉錄請求" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=page;exitX=1;exitY=0.5;entryX=0;entryY=0.75;" edge="1" source="diagnostic" target="server" parent="local"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="a4" value="音訊 API" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=page;exitX=1;exitY=1;entryX=0;entryY=0.5;" edge="1" source="server" target="router" parent="1"><mxGeometry x="0.65" y="-10" relative="1" as="geometry"/></mxCell>
+        <mxCell id="a5" value="llm()／ai.js" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=page;" edge="1" source="server" target="llm" parent="1"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="note" value="診斷只送 1 秒靜音與團隊術語，不讀會議錄音；仍有少量 API 費用。&#xa;Web／terminal 顯示狀態、耗時與略過數量，不回傳金鑰、音訊或上游原始 body。&#xa;轉錄不自動重試；文字 llm() 的暫時性錯誤最多重試 2 次。CLI 診斷不啟動 HTTP server。" style="text;html=1;align=left;whiteSpace=wrap;fontSize=13;" vertex="1" parent="1"><mxGeometry x="40" y="650" width="980" height="80" as="geometry"/></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="pipeline" name="0.9.0 轉錄與摘要流程">
+    <mxGraphModel dx="1100" dy="720" grid="1" gridSize="10" page="1" pageScale="1" pageWidth="1100" pageHeight="720" adaptiveColors="auto">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="title" value="notion-meetings 0.9.0｜正式流程與 200 個術語限制" style="text;html=1;align=left;fontSize=22;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="40" y="40" width="1000" height="40" as="geometry"/></mxCell>
+        <mxCell id="upload" value="錄音／上傳&#xa;保存原始附件&#xa;processMeeting()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1"><mxGeometry x="40" y="160" width="140" height="60" as="geometry"/></mxCell>
+        <mxCell id="ffmpeg" value="ffmpeg&#xa;單聲道 16 kHz&#xa;48 kbps MP3" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1"><mxGeometry x="220" y="160" width="140" height="60" as="geometry"/></mxCell>
+        <mxCell id="terms" value="合併術語與參與者&#xa;會議術語優先&#xa;保留校對完整清單" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1"><mxGeometry x="400" y="160" width="140" height="60" as="geometry"/></mxCell>
+        <mxCell id="request" value="requestTranscription()&#xa;僅送前 200 個術語&#xa;記錄超量警告" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="1"><mxGeometry x="580" y="160" width="140" height="60" as="geometry"/></mxCell>
+        <mxCell id="mai" value="OpenRouter MAI／Azure&#xa;ZDR + 分講者&#xa;verbose_json" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=12;" vertex="1" parent="1"><mxGeometry x="760" y="160" width="140" height="60" as="geometry"/></mxCell>
+        <mxCell id="opencc" value="保存 raw&#xa;中文（台灣）適用&#xa;OpenCC cn → twp" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1"><mxGeometry x="760" y="400" width="140" height="60" as="geometry"/></mxCell>
+        <mxCell id="correct" value="有術語才校對&#xa;合併清單上限 500&#xa;keepTermEdits() 驗證" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1"><mxGeometry x="580" y="400" width="140" height="60" as="geometry"/></mxCell>
+        <mxCell id="summary" value="Agent 摘要與講者建議&#xa;使用設定的 llm()&#xa;建議失敗不擋摘要" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1"><mxGeometry x="400" y="400" width="140" height="60" as="geometry"/></mxCell>
+        <mxCell id="save" value="update() 排隊保存&#xa;逐字稿、摘要、待辦&#xa;usage 與 warning" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1"><mxGeometry x="220" y="400" width="140" height="60" as="geometry"/></mxCell>
+        <mxCell id="view" value="Web 每 2 秒輪詢&#xa;顯示完成或錯誤&#xa;用量明細顯示略過數" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1"><mxGeometry x="40" y="400" width="140" height="60" as="geometry"/></mxCell>
+        <mxCell id="p1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=page;" edge="1" source="upload" target="ffmpeg" parent="1"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="p2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=page;" edge="1" source="ffmpeg" target="terms" parent="1"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="p3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=page;" edge="1" source="terms" target="request" parent="1"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="p4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=page;" edge="1" source="request" target="mai" parent="1"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="p5" value="成功回應" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=page;" edge="1" source="mai" target="opencc" parent="1"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="p6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=page;" edge="1" source="opencc" target="correct" parent="1"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="p7" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=page;" edge="1" source="correct" target="summary" parent="1"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="p8" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=page;" edge="1" source="summary" target="save" parent="1"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="p9" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=page;" edge="1" source="save" target="view" parent="1"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="limits" value="實測：200 個術語成功；201 個回 400。只截取送往轉錄 API 的清單，不刪學習資料。&#xa;超量會記錄 phraseCount、omittedPhraseCount、warning。參與者名字只供轉錄，不供術語校對。&#xa;流程狀態：transcribing → correcting（有術語）→ summarizing → done／error。失敗仍保存用量。&#xa;依據：server.js、auth.js、ai.js、public/index.html、docs/decisions.md D-003 補充與 D-025。" style="text;html=1;align=left;whiteSpace=wrap;fontSize=13;" vertex="1" parent="1"><mxGeometry x="40" y="520" width="1000" height="120" as="geometry"/></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

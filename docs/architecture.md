@@ -2,6 +2,14 @@
 
 為什麼這樣設計，見 [decisions.md](decisions.md)。程式碼：`server.js`（路由與處理流程）、`auth.js`（帳號、session、權限、名錄合併，D-013）、`ai.js`（模型設定、Agent、context window 檢查、skills，D-014）、`public/index.html`（介面）。
 
+可編輯架構圖：[architecture.drawio](architecture.drawio)，含「0.9.0 架構總覽」與「0.9.0 轉錄與摘要流程」兩頁。圖中的轉錄術語上限、診斷與安全邊界以本文和程式碼為準。
+
+![0.9.0 元件與資料邊界](images/architecture-overview.png)
+
+![0.9.0 轉錄與摘要流程](images/architecture-pipeline.png)
+
+兩張 PNG 均內嵌 draw.io 圖資料，可預覽或開啟編輯；原生 `.drawio` 主檔也一起保留在 repo。
+
 ## 處理流程
 
 ```text
@@ -45,8 +53,9 @@ data/learned.json（jsonStore，修改排隊執行）
   bench    {cases[{meetingId, frozenAt, frozenBy}], runs[], running?, lastError?}
 
 transcribeClean(m)：processMeeting 與 benchmark 共用
-  transcribe：phraseList＝mergeTerms(會議術語, 啟用的團隊術語＋knowledge.json 的術語)＋參與者名字，上限 500
+  transcribe：phraseList＝mergeTerms(會議術語, 啟用的團隊術語＋knowledge.json 的術語)＋參與者名字，送 API 前只取前 200 個
   → OpenCC → correctTerms（同一份合併術語，不含參與者名字；附 knowledge.json 的別名）→ flagForeignScript（中文會議裡的韓文、假名後加【?】）
+    （校對合併清單仍以 500 個為上限；超過轉錄上限時不刪資料，記錄略過數量與警告）
 summarizing：summarize() 與 suggestSpeakers() 同時執行；建議失敗不影響會議
 ```
 
@@ -117,6 +126,7 @@ summarizing：summarize() 與 suggestSpeakers() 同時執行；建議失敗不�
 | `GET /api/learned` | 管理員：整份學習資料；其他人：只有啟用的團隊術語 |
 | `POST /api/learned/terms` `{term}` | 新增團隊術語（唯讀帳號不行）；`PATCH` `{term, enabled}`、`DELETE ?term=` 限管理員 |
 | `PUT /api/admin/ai/keys` `{modelId, key}` | 管理員設定該模型 Endpoint 的 API key；空字串＝清除。存在 `secrets.json`（600），回應只有 `keyStatus {set, last4, setAt}` |
+| `POST /api/admin/transcription-test` | 管理員執行轉錄診斷，回 `{ok, message, at, model, checks}`；檢查 key 額度、ffmpeg、1 秒靜音加團隊術語的 ZDR 轉錄請求，不讀取會議錄音；會產生少量 API 費用 |
 | `POST /api/admin/ai/models/:id/list` | 讀取 OpenAI 相容端點的 `GET /models`，回傳模型 ID 清單 |
 | `POST /api/learned/bench` | 管理員執行 benchmark，回 202；沒有案例回 400、執行中回 409 |
 | `POST`／`DELETE /api/meetings/:id/benchmark` | 擁有者凍結或取消凍結；會議尚未完成回 409 |
@@ -158,6 +168,15 @@ summarizing：summarize() 與 suggestSpeakers() 同時執行；建議失敗不�
 - 術語校對一次送完整逐字稿，輸出上限是 64k tokens。
 - 錄音停止前，資料都在瀏覽器記憶體裡，分頁當掉就會遺失。
 - MediaRecorder 產生的 webm 沒有時長資訊，播放時拖曳跳段可能不準。
+
+## 轉錄診斷
+
+管理後台的「測試轉錄連線」與 `mise exec -- node server.js --debug-transcription` 共用 `debugTranscription()`。CLI 通過時 exit 0，失敗時 exit 1，不啟動 HTTP 伺服器。短靜音測試只驗證請求是否被接受，不驗證辨識品質、長錄音或個別會議的術語與參與者。
+
+正式轉錄與診斷共用 `requestTranscription()`。terminal 以 `[transcribe]` 記錄開始、完成、失敗、模型、音訊 bytes、術語數、耗時、HTTP status 與可用的 request ID，不輸出 key、音訊、術語內容或上游原始 body。失敗訊息依 HTTP status 提供排查提示，經 `meeting.error` 顯示在網頁；`usage[]` 另記 `audioBytes`、`phraseCount`、`language`、`zdr`、`httpStatus` 與可用的 `requestId`。網路中斷與回應解析失敗也記錄用量。診斷結果不寫入會議用量。
+
+MAI／Azure 的 phraseList 實測 200 個成功、201 個回 400（D-003 補充）。共用請求僅送前 200 個，`phraseCount` 記實際送出數量；有超量時另記 `omittedPhraseCount` 與 `warning`，診斷訊息、terminal 與會議用量明細都會顯示。後續校對仍使用完整合併清單，不受轉錄 API 的 200 個限制。
+
 
 ## 執行檔（D-017）
 

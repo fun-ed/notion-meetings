@@ -21,6 +21,7 @@ Releases: <https://github.com/fun-ed/notion-meetings/releases> · Changes: [CHAN
 - Search with Simplified/Traditional matching and filters such as `tag:`, `who:`, `team:`, `after:`.
 - Accounts with admin, member and read-only roles, per-meeting access, revocable share links and comments.
 - AI usage per call (tokens, audio seconds, cost, time), light and dark themes, and Taiwan time (GMT+8) throughout.
+- Transcription diagnostics (0.9.0): check the OpenRouter key allowance, ffmpeg and a short ZDR audio request from the admin page or terminal. Failures include actionable messages and request information without exposing credentials or audio.
 
 ![Transcript with speaker range correction (dark theme)](docs/images/transcript-dark.png)
 
@@ -138,10 +139,29 @@ mise exec -- npm run build   # single-file binaries in dist/ (Bun)
 
 A manually triggered GitHub Actions workflow (`gh workflow run ci.yml`) runs the unit tests, builds the five binaries, checks `SHA256SUMS` and starts the Linux x64 binary. The pipeline regression test (`eval/e2e.py`) and the binary release check (`scripts/smoke-binary.sh`) call the real APIs, so they run manually; the steps are in the `meetings-dev` skill.
 
+### Transcription diagnostics
+
+For transcription failures, use **Admin → Test transcription connection** or run:
+
+```bash
+mise exec -- node server.js --debug-transcription
+```
+
+This checks the API key's remaining allowance, ffmpeg, and a one-second silent audio request with the current team glossary and ZDR enabled. It does not send meeting recordings, but incurs a small API charge.
+
+The transcription API accepts at most 200 glossary phrases in our tests. Meeting terms come first; only the first 200 are sent. Any omitted count is shown in diagnostics, terminal logs and meeting usage details. This does not delete terms or reduce the glossary used for correction.
+
+The JSON report includes `ok`, `message` and per-check results in `checks`; exit status is 0 on success and 1 on failure. It does not verify long recordings or recognition quality.
+
+Normal transcription errors also appear on the meeting page and in terminal logs, with HTTP status, model, audio size, phrase count and elapsed time, without credentials or audio content. A `429` indicates rate limiting, not exhausted credit; the response alone may not identify whether the limit applies to the key, account, IP or shared provider capacity.
+
+Restart the source server after updating backend code; existing failure records are not rewritten. Older release binaries do not gain the diagnostics by updating the source files.
+
 | Path | Contents |
 |---|---|
 | [docs/decisions.md](docs/decisions.md) | Decisions and reasons. Read before changing code |
 | [docs/architecture.md](docs/architecture.md) | Pipeline, data fields, API |
+| [docs/architecture.drawio](docs/architecture.drawio) | Editable 0.9.0 component and pipeline diagrams, including diagnostics and the 200-phrase transcription limit |
 | [docs/plans/](docs/plans/) | Plans, named `YYYY-MM-DD-<topic>.md`; start with [next steps](docs/plans/2026-10-21-next-steps.md) |
 | [docs/research/](docs/research/) | Evaluations; the accuracy of every tested setup is summarized in [benchmark standards](docs/research/2026-10-21-benchmark-standards.md) |
 | `.claude/skills/meetings-dev` | Development, testing, build and release |

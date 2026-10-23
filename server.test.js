@@ -311,6 +311,7 @@ test('accounts, roles, meeting access, comments, share links, password reset, pr
   assert.equal((await (await member(`${api}/auth/register`, json('POST', { username: 'mei', password: 'password1', displayName: '小美' }))).json()).user.role, 'member');
   const roUser = (await (await ro(`${api}/auth/register`, json('POST', { username: 'viewer', password: 'password1' }))).json()).user;
   await admin(`${api}/admin/users/${roUser.id}`, json('PUT', { role: 'readonly' }));
+  assert.equal((await ro(`${api}/admin/transcription-test`, json('POST', {}))).status, 403, 'readonly cannot spend API credit on diagnostics');
   await admin(`${api}/admin/settings`, json('PUT', { registration: false }));
   assert.equal((await client()(`${api}/auth/register`, json('POST', { username: 'eve', password: 'password1' }))).status, 403, 'registration closed');
 
@@ -503,5 +504,126 @@ test('tidy view drops filler sounds but keeps sentence-final particles (D-023)',
   for (const [input, want] of [['嗯。', ''], ['嗯嗯。', ''], ['哦， OK。', 'OK。'], ['從呃7月', '從7月'], ['啊，還是，嗯。', '還是。'],
     ['有，有。欸，聽得到嗎？', '有，有。聽得到嗎？'], ['team 啊，所以', 'team 啊，所以'], ['對啊，好啊。', '對啊，好啊。'], ['等一下哦。', '等一下哦。']]) {
     assert.equal(tidy(input), want, input);
+  }
+});
+
+test('transcription diagnostics: actionable errors, safe logs, real request options and network failures', async () => {
+  const { requestTranscription, transcriptionFailure } = await import('./server.js');
+  const originalFetch = globalThis.fetch, originalKey = process.env.OPENROUTER_API_KEY;
+  const info = console.info, error = console.error, output = [];
+  console.info = console.error = (...args) => output.push(args.join(' '));
+  process.env.OPENROUTER_API_KEY = 'sk-private-test-key';
+  try {
+    let status = 400;
+    globalThis.fetch = async (url, opts) => {
+      assert.equal(url, 'https://openrouter.ai/api/v1/audio/transcriptions');
+      assert.equal(opts.headers.Authorization, 'Bearer sk-private-test-key');
+      const body = JSON.parse(opts.body);
+      assert.equal(body.provider.zdr, true);
+      assert.equal(body.provider.options.azure.diarization.enabled, true);
+      assert.deepEqual(body.provider.options.azure.phraseList.phrases, ['private-term']);
+      assert.equal(body.language, 'zh');
+      return new Response(JSON.stringify(status === 200 ? { segments: [], usage: { seconds: 1, cost: 0.001 } }
+        : { error: { message: 'sk-private-test-key private-term PRIVATE_AUDIO', metadata: { raw: 'private content' } } }),
+      { status, headers: { 'x-request-id': 'req-123' } });
+    };
+    const log = [];
+    await assert.rejects(requestTranscription(Buffer.from('PRIVATE_AUDIO'), 'zh-TW', ['private-term'], log), /OpenRouter 400:.*不是餘額不足.*術語 1 個.*request ID req-123/);
+    assert.equal(log[0].httpStatus, 400);
+    assert.match(log[0].error, /供應商拒絕/);
+    status = 200;
+    assert.equal((await requestTranscription(Buffer.from('PRIVATE_AUDIO'), 'zh-TW', ['private-term'], log)).audioSeconds, 1);
+    assert.equal(log[1].costUsd, 0.001);
+    globalThis.fetch = async () => { throw new Error('sk-private-test-key PRIVATE_AUDIO'); };
+    await assert.rejects(requestTranscription(Buffer.from('PRIVATE_AUDIO'), 'auto', [], log), /連線中斷、逾時或回應格式錯誤/);
+    assert.equal(log.length, 3, 'failed network requests also record usage');
+    assert.doesNotMatch(output.join('\n') + JSON.stringify(log), /sk-private-test-key|private-term|PRIVATE_AUDIO|private content/);
+    for (const [status, text] of [[401, '金鑰無效'], [402, '額度不足'], [413, '太大'], [429, '限流'], [503, '暫時異常']]) {
+      assert.ok(transcriptionFailure(status).includes(text));
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    process.env.OPENROUTER_API_KEY = originalKey;
+    console.info = info; console.error = error;
+  }
+});
+
+test('admin transcription test returns checks for key, ffmpeg and upstream; never sends a meeting recording', async () => {
+  const originalFetch = globalThis.fetch, originalKey = process.env.OPENROUTER_API_KEY;
+  const member = client(), anonymous = client();
+  assert.equal((await member(`${api}/auth/login`, json('POST', { username: 'mei', password: 'password2' }))).status, 200);
+  const route = `${api}/admin/transcription-test`;
+  assert.equal((await anonymous(route, json('POST', {}))).status, 401);
+  assert.equal((await member(route, json('POST', {}))).status, 403);
+  let calls = 0, status = 200, sample;
+  globalThis.fetch = async (url, opts) => {
+    if (!String(url).startsWith('https://openrouter.ai/')) return originalFetch(url, opts);
+    calls++;
+    if (String(url).endsWith('/key')) return new Response(JSON.stringify({ data: { limit_remaining: 3.7, key: 'MUST_NOT_RETURN' } }));
+    const body = JSON.parse(opts.body);
+    assert.equal(body.provider.zdr, true);
+    assert.equal(body.input_audio.format, 'mp3');
+    assert.ok(Buffer.from(body.input_audio.data, 'base64').length < 10000, 'only one second of synthetic audio');
+    sample = Buffer.from(body.input_audio.data, 'base64');
+    return new Response(JSON.stringify(status === 200 ? { segments: [], duration: 1 } : { error: { message: 'private provider body' } }), { status });
+  };
+  try {
+    process.env.OPENROUTER_API_KEY = '';
+    const missing = await (await admin(route, json('POST', {}))).json();
+    assert.equal(missing.ok, false);
+    assert.equal(calls, 0);
+    process.env.OPENROUTER_API_KEY = 'fake-diagnostic-key';
+    const success = await (await admin(route, json('POST', {}))).json();
+    assert.equal(success.ok, true);
+    assert.deepEqual(success.checks.map(c => c.name), ['API key', 'ffmpeg', '轉錄 API']);
+    assert.match(success.checks[0].message, /3\.7000/);
+    status = 400;
+    const failed = await (await admin(route, json('POST', {}))).json();
+    assert.equal(failed.ok, false);
+    assert.match(failed.checks.at(-1).message, /OpenRouter 400/);
+    assert.doesNotMatch(JSON.stringify([success, failed]), /fake-diagnostic-key|MUST_NOT_RETURN|private provider body/);
+    const uploaded = await (await admin(`${base}?filename=diagnostic.mp3&lang=zh-TW`, { method: 'POST', body: sample })).json();
+    let meeting;
+    for (let i = 0; i < 100; i++) {
+      meeting = await (await admin(`${base}/${uploaded.id}`)).json();
+      if (meeting.status === 'error' && meeting.usage.length) break;
+      await new Promise(r => setTimeout(r, 20));
+    }
+    assert.equal(meeting.status, 'error');
+    assert.match(meeting.error, /OpenRouter 400:.*術語/);
+    assert.equal(meeting.usage.at(-1).httpStatus, 400);
+    assert.doesNotMatch(JSON.stringify(meeting), /fake-diagnostic-key|private provider body/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    process.env.OPENROUTER_API_KEY = originalKey;
+  }
+});
+
+test('transcription phrase limit: send at most 200, preserve correction terms and expose omissions', async () => {
+  const { requestTranscription } = await import('./server.js');
+  const originalFetch = globalThis.fetch, originalKey = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = 'fake-phrase-limit-key';
+  let sent;
+  globalThis.fetch = async (url, opts) => {
+    const body = JSON.parse(opts.body);
+    assert.equal(body.provider.zdr, true);
+    sent = body.provider.options.azure.phraseList?.phrases ?? [];
+    return new Response(JSON.stringify(sent.length > 200 ? { error: { message: 'Provider returned 400' } } : { segments: [], duration: 1 }),
+      { status: sent.length > 200 ? 400 : 200 });
+  };
+  try {
+    for (const count of [0, 199, 200, 201, 220, 500]) {
+      const terms = Array.from({ length: count }, (_, i) => `term-${i}`), log = [];
+      await requestTranscription(Buffer.from('synthetic-audio'), 'zh-TW', terms, log);
+      assert.deepEqual(sent, terms.slice(0, 200), 'the existing meeting-first order is retained');
+      assert.equal(terms.length, count, 'the full correction glossary is not mutated');
+      assert.equal(log[0].phraseCount, Math.min(count, 200));
+      assert.equal(log[0].omittedPhraseCount ?? 0, Math.max(0, count - 200));
+      if (count > 200) assert.match(log[0].warning, /轉錄術語上限 200/);
+      else assert.equal(log[0].warning, undefined);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    process.env.OPENROUTER_API_KEY = originalKey;
   }
 });

@@ -3,17 +3,18 @@
 Notion AI Meeting Notes 本機復刻：錄音或上傳 → 分講者台灣繁體逐字稿 → LLM 摘要（預設 Claude Opus 5.5，可換 Sonnet、GPT-6.1 Sol 等）。
 
 ## 原始碼地圖
-- `server.js`：路由、上傳串流、Range 播放、處理流程 `processMeeting()`、搜尋。流程細節見 `mem:backend/pipeline`。
+- `server.js`：路由、上傳串流、Range 播放、處理流程 `processMeeting()`、搜尋。流程、共用轉錄請求與 Web／CLI 診斷的安全邊界見 `mem:backend/pipeline`。
 - `auth.js`：帳號（scrypt）、記憶體 session、`permOf()` 權限、`mergePeople()` 名錄合併、`jsonStore()`；權限與帳號規則見 `mem:backend/auth`。
 - `ai.js`：模型設定、內建 Agent、`pickAI()`、`checkContext()`、`loadSkill()`；見 `mem:backend/pipeline`。
 - `public/index.html`：全部前端，單檔，inline CSS/JS，無框架、無 build。
 - `server.test.js`：`node --test` 單元與 API 測試。
 - `eval/`：測試音檔產生、轉錄模型評測、端對端回歸閘門，見 `mem:eval/core`。
-- `CHANGELOG.md`：每版新增與驗證結果（目前 0.8.0）；版本號與 `repository` 在 `package.json`，`/api/auth/me` 回傳 `app {version, repo}` 給側欄左下角。
+- `CHANGELOG.md`：每版新增與驗證結果；目前版本號與 `repository` 以 `package.json` 為準，`/api/auth/me` 回傳 `app {version, repo}` 給側欄左下角。
 - `scripts/build.sh`（Bun 打包）、`scripts/smoke-binary.sh`（執行檔發版檢查：版本、內嵌介面、e2e）、`scripts/start-litellm.sh`（`npm run start:litellm`）。
 - `.github/workflows/ci.yml`：只能手動觸發（使用者決定，`gh workflow run ci.yml`），跑 `npm test`、Bun 1.4.3 建置 5 平台、`sha256sum -c`、啟動 Linux x64 執行檔檢查版本與內嵌介面；不含任何憑證，真 API 回歸留在本機。
 - `README.md`（英文）＋`README.zh-TW.md`（繁中），精簡版，只放 3 張截圖；兩份一起改。
 - `docs/decisions.md`：決策 D-001..D-025，唯一權威來源；`docs/architecture.md`：欄位、路由、設定；`docs/plans/`：計畫，總覽是 `2026-10-21-next-steps.md`（P0／P1／P2），細節在 `learning-loop`、`llm-endpoints`、`reliability`、`roadmap`、`team-knowledge-quality`（團隊知識分團隊、Agent 自動建議、摘要台灣用詞檢查）；`docs/research/`：評測，所有設定的分數在 `2026-10-21-benchmark-standards.md` 的準確度總表。
+- `docs/architecture.drawio`：可編輯元件總覽與轉錄／摘要流程圖；與 `docs/architecture.md` 一起維護，包含診斷及資料安全邊界。具體流程約束見 `mem:backend/pipeline`。
 - Git 歷史在 2026-10-21 壓成單一 commit（`e66e5eb notion-meetings v0.5.0`），只有 `v0.5.0` tag 與 Release；之前的 commit 編號都失效。
 - `.claude/skills/meetings-dev`、`.claude/skills/stt-research`：開發維護與模型評測的步驟。
 

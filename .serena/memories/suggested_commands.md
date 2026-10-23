@@ -3,6 +3,7 @@
 - 安裝：`mise exec -- npm install`
 - 啟動：預設 `mise exec -- npm run start:magpie`（LLM 走 magpie）；公司 LiteLLM：`mise exec -- npm run start:litellm`（讀 `~/.config/litellm/base_url`、`key`，不印出 key）；官方 API：設 `ANTHROPIC_API_KEY` 後 `mise exec -- npm start`。`PORT`、`DATA_DIR` 可覆寫，測試時用 `DATA_DIR=$(mktemp -d)` 避免動到 `data/`。
 - 單元測試：`mise exec -- npm test`
+- 轉錄診斷的 CLI、管理員 API、費用與驗證範圍見 `mem:backend/pipeline` 的「轉錄診斷與錯誤邊界」。
 - 回歸：`T=$(mktemp -d) && ./eval/make-testset.sh "$T"`，另開伺服器 `PORT=3919 DATA_DIR=$(mktemp -d) mise exec -- npm run start:magpie`，再 `mise exec -- python3 -I eval/e2e.py http://127.0.0.1:3919 "$T"`；結束用埠號關：`lsof -ti tcp:3919 -sTCP:LISTEN | xargs kill`。不要用 `pkill -f "node server.js"`：本機 Camofox 也叫這個名字，會一起被殺；殺 `$!` 只殺到 `mise exec` 外層。
 - 回歸 `e2e.py` 會在空 DATA_DIR 自動註冊第一個帳號並登入；既有資料設 `E2E_USER`／`E2E_PASS`。
 - 模型評測：`mise exec -- python3 -I eval/stt_eval.py "$T" meeting.mp3 1.0 eval/configs/openrouter.json`（嚴苛版 `meeting-hard.mp3 1.15`）。

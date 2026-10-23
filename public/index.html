@@ -248,7 +248,7 @@ const usd = n => n ? `$${n.toFixed(4)}` : '';
 const inTotal = e => (e.inputTokens ?? 0) + (e.cacheReadTokens ?? 0) + (e.cacheWriteTokens ?? 0);
 // Per-call AI usage table (meeting page and admin share the column layout).
 const usageRows = rows => `<div class="scroll-x"><table class="db usage"><thead><tr><th>時間</th><th>項目</th><th>模型</th><th>effort</th><th>總輸入</th><th>輸出</th><th>其中快取讀／寫</th><th>音訊</th><th>費用</th><th>耗時</th></tr></thead><tbody>
-  ${rows.map(e => `<tr${e.error ? ' class="err"' : ''}><td class="nowrap">${dt(e.at)}</td><td>${KIND[e.kind] ?? esc(e.kind)}${e.error ? ` ⚠ ${esc(e.error)}` : ''}</td>
+  ${rows.map(e => `<tr${e.error ? ' class="err"' : ''}><td class="nowrap">${dt(e.at)}</td><td>${KIND[e.kind] ?? esc(e.kind)}${e.error ? ` ⚠ ${esc(e.error)}` : ''}${e.warning ? `<br><span class="muted">${esc(e.warning)}</span>` : ''}</td>
     <td>${esc(e.label ?? e.model)}</td><td>${esc(e.effort ?? '')}</td><td>${e.provider !== 'openrouter' ? num(inTotal(e)) : ''}</td><td>${e.provider !== 'openrouter' ? num(e.outputTokens) : ''}</td>
     <td>${e.provider !== 'openrouter' ? `${num(e.cacheReadTokens)}／${num(e.cacheWriteTokens)}` : ''}</td><td>${e.audioSeconds ? fmt(e.audioSeconds) : ''}</td><td>${usd(e.costUsd)}</td><td class="nowrap">${secs(e.ms)}</td></tr>`).join('')}</tbody></table></div>`;
 const totalOf = rows => ({ calls: rows.length,
@@ -416,11 +416,29 @@ async function showAdmin() {
       ${rows.map(r => `<tr><td>${esc(label(r.key))}</td><td>${r.calls}</td><td>${r.errors || ''}</td><td>${num(inTotal(r))}</td><td>${num(r.outputTokens)}</td>
         <td>${num(r.cacheReadTokens)}／${num(r.cacheWriteTokens)}</td><td>${r.audioSeconds ? fmt(r.audioSeconds) : ''}</td><td>${usd(r.costUsd)}</td><td class="nowrap">${secs(r.ms)}</td></tr>`).join('')}</tbody></table>`).join('')}`
       : '<p class="muted">還沒有 AI 呼叫紀錄。</p>'}
+    <h2 class="h2">轉錄診斷</h2>
+    <p class="muted">檢查 OpenRouter 金鑰額度、ffmpeg 與轉錄 API。只送 1 秒靜音和目前團隊術語，強制 ZDR，不送會議錄音；會產生少量 API 費用。不驗證長錄音或辨識品質。</p>
+    <button onclick="testTranscription(this)">測試轉錄連線</button>
+    <pre id="transcription-test" role="status" aria-live="polite" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
     <div id="learn-admin"></div>
     <div id="ai-admin"></div>`, true);
   renderLearnAdmin();
   aiCfg = await api('/api/ai');
   renderAIAdmin();
+}
+
+async function testTranscription(button) {
+  const output = $('#transcription-test');
+  button.disabled = true;
+  output.textContent = '診斷中…';
+  try {
+    const report = await api('/api/admin/transcription-test', json('POST', {}));
+    output.textContent = `${report.message}\n${report.checks.map(c => `${c.ok ? '通過' : '失敗'} · ${c.name}：${c.message}`).join('\n')}`;
+  } catch (e) {
+    output.textContent = `診斷失敗：${e.message}`;
+  } finally {
+    button.disabled = false;
+  }
 }
 
 // ---- 管理後台：學習（團隊術語、benchmark）----
@@ -913,7 +931,7 @@ function render(m) {
       ${prop('🏢', '團隊', [...m.teams.map(teamLink), ...uniq(m.people.map(p => p.leader)).map(leaderLink)].join('') || '<span class="muted">講者改成名錄裡的名字後會自動帶出</span>')}
       ${prop('🌐', '語言', esc(langLabel) + (m.language ? ` <span class="muted">· 偵測為 ${esc(m.language)}</span>` : ''))}
       ${prop('📖', '術語', `<textarea rows="1" aria-label="術語" placeholder="空白" onchange="patch({ glossary: this.value })">${esc(m.glossary)}</textarea>`
-        + (teamTerms.length ? `<span class="muted" title="${esc(teamTerms.join('、'))}">轉錄時另外套用 ${teamTerms.length} 個團隊術語（這裡的術語也會加入團隊術語）</span>` : ''))}
+        + (teamTerms.length ? `<span class="muted" title="${esc(teamTerms.join('、'))}">另有 ${teamTerms.length} 個團隊術語；轉錄最多送 200 個，以這場會議的術語優先，校對清單不受此限制。</span>` : ''))}
       ${prop('📎', '錄音', `<a href="/api/meetings/${m.id}/audio?download" download>${esc(m.originalName)}</a>`)}
       ${prop('📊', 'AI 用量', (m.usage ?? []).length ? `${usageLine(totalOf(m.usage))}<details><summary class="muted">每次呼叫明細</summary>${usageRows([...m.usage].reverse())}</details>` : '<span class="muted">尚無紀錄</span>')}
       ${prop('🔒', '權限', m.perm === 'owner'

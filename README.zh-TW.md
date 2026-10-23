@@ -21,6 +21,7 @@ Notion AI Meeting Notes 的本機復刻。錄音或上傳會議檔案後，會�
 - 搜尋簡繁互通，支援 `tag:`、`who:`、`team:`、`after:` 等篩選。
 - 帳號分管理員、成員、唯讀；每場會議可設權限，也能建立可撤銷的分享連結並留言。
 - 每次 AI 呼叫都記錄用量（tokens、音訊秒數、費用、耗時）。有亮色與暗色模式，時間一律是台灣時間（GMT+8）。
+- 轉錄診斷（0.9.0）：可在管理後台或 terminal 檢查 OpenRouter 金鑰額度、ffmpeg 與短音訊 ZDR 請求。失敗時顯示排查訊息與請求資訊，不輸出金鑰或音訊。
 
 ![逐字稿與講者範圍校正（暗色）](docs/images/transcript-dark.png)
 
@@ -141,10 +142,29 @@ mise exec -- npm run build   # 用 Bun 在 dist/ 產生單一執行檔
 
 手動觸發的 GitHub Actions（`gh workflow run ci.yml`）會跑單元測試、建置 5 個平台的執行檔、核對 `SHA256SUMS`，並實際啟動 Linux x64 執行檔。處理流程的回歸測試（`eval/e2e.py`）和執行檔的發版檢查（`scripts/smoke-binary.sh`）會呼叫真的 API，所以手動執行，步驟寫在 `meetings-dev` skill。
 
+### 轉錄診斷
+
+轉錄失敗時，可在「管理後台 → 測試轉錄連線」執行診斷，或在 terminal 執行：
+
+```bash
+mise exec -- node server.js --debug-transcription
+```
+
+診斷會檢查這把 API key 的剩餘額度、ffmpeg，以及帶目前團隊術語與 ZDR 的 1 秒靜音轉錄請求。不會傳送會議錄音，但會產生少量 API 費用。
+
+轉錄 API 實測最多接受 200 個術語。會議術語優先，只送前 200 個；超出的數量會顯示在診斷訊息、terminal 與會議用量明細。不會刪除術語，也不縮減後續校對使用的清單。
+
+JSON 報告包含 `ok`、`message`，以及 `checks` 裡的各項檢查結果；通過時 exit 0，失敗時 exit 1。這不驗證長錄音或辨識品質。
+
+正式轉錄失敗時，會議網頁與 terminal 也會顯示 HTTP status、模型、音訊大小、術語數與耗時，不輸出金鑰或音訊內容。`429` 代表限流，不代表 credit 用完；單靠回應不一定能分辨限制套在金鑰、帳戶、IP 或供應商共享容量。
+
+更新後端程式後需重啟原始碼伺服器；既有失敗紀錄不會改寫。舊版 Release 執行檔不會因更新原始碼而取得診斷功能。
+
 | 路徑 | 內容 |
 |---|---|
 | [docs/decisions.md](docs/decisions.md) | 決策與理由，改程式前先讀 |
 | [docs/architecture.md](docs/architecture.md) | 處理流程、資料欄位、API |
+| [docs/architecture.drawio](docs/architecture.drawio) | 可編輯的 0.9.0 元件與處理流程圖，包含診斷與轉錄術語 200 個上限 |
 | [docs/plans/](docs/plans/) | 計畫，檔名是 `YYYY-MM-DD-<主題>.md`；總覽是 [下一步](docs/plans/2026-10-21-next-steps.md) |
 | [docs/research/](docs/research/) | 評測報告；所有試過的設定與準確度整理在 [benchmark 標準](docs/research/2026-10-21-benchmark-standards.md) |
 | `.claude/skills/meetings-dev` | 開發、測試、建置與發版 |

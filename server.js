@@ -171,28 +171,114 @@ async function transcribe(m, log = []) {
   // Normalize webm/mp4/mov uploads to small mono mp3; the original file stays as the attachment.
   await promisify(execFile)('ffmpeg', ['-y', '-loglevel', 'error', '-i', path.join(dir(m.id), m.file), '-vn', '-ac', '1', '-ar', '16000', '-b:a', '48k', mp3]);
   const terms = mergeTerms(await termsFor(m), m.participants ?? []); // names help MAI spell people, and speaker hints find them
-  // shortcut: whole meeting in one base64 request; split into chunks if OpenRouter starts rejecting long meetings (413).
-  const started = Date.now();
-  const res = await fetch('https://openrouter.ai/api/v1/audio/transcriptions', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: 'microsoft/mai-transcribe-2',
-      input_audio: { data: (await fsp.readFile(mp3)).toString('base64'), format: 'mp3' },
-      ...(m.lang !== 'auto' && { language: m.lang.split('-')[0] }),
-      response_format: 'verbose_json',
-      timestamp_granularities: ['segment'],
-      provider: { zdr: true, options: { azure: { diarization: { enabled: true }, ...(terms.length && { phraseList: { phrases: terms } }) } } },
-    }),
-  }).finally(() => fsp.rm(mp3, { force: true }));
-  const entry = { kind: 'transcribe', provider: 'openrouter', model: 'microsoft/mai-transcribe-2', at: nowIso() };
-  if (!res.ok) {
-    log.push({ ...entry, ms: Date.now() - started, error: `HTTP ${res.status}` });
-    throw new Error(`OpenRouter ${res.status}: ${await res.text()}`);
+  try {
+    return await requestTranscription(await fsp.readFile(mp3), m.lang, terms, log, m.id);
+  } finally {
+    await fsp.rm(mp3, { force: true });
   }
-  const t = parseTranscription(await res.json());
-  log.push({ ...entry, ms: Date.now() - started, audioSeconds: t.audioSeconds, costUsd: t.costUsd });
-  return t;
+}
+
+const TRANSCRIBE_MODEL = 'microsoft/mai-transcribe-2';
+// Measured on MAI/Azure: 200 phrases succeeds; 201 returns HTTP 400.
+const MAX_TRANSCRIPTION_PHRASES = 200;
+export function transcriptionFailure(status) {
+  return ({
+    400: '供應商拒絕轉錄請求。這不是餘額不足的錯誤；請執行轉錄診斷，檢查音訊與術語選項。',
+    401: 'OpenRouter 金鑰無效或已撤銷，請檢查金鑰設定。',
+    402: 'OpenRouter 可用額度不足，請檢查帳戶餘額與這把 API key 的額度限制。',
+    403: 'OpenRouter 拒絕存取，請檢查 API key 權限與供應商政策。',
+    413: '轉錄請求太大，目前整場錄音一次送出，請縮短音訊。',
+    429: '轉錄服務限流，請稍候再試；這不表示 credit 用完。',
+  })[status] ?? (status >= 500 ? 'OpenRouter 或轉錄供應商暫時異常，請稍候再試。' : '轉錄回應異常，請執行轉錄診斷。');
+}
+
+export async function requestTranscription(audio, lang, terms, log = [], meetingId = null) {
+  const key = openrouterKey();
+  if (!key) throw new Error('OPENROUTER_API_KEY 未設定（也找不到 ~/.config/openrouter/key）');
+  const started = Date.now(), phrases = terms.slice(0, MAX_TRANSCRIPTION_PHRASES);
+  const omitted = terms.length - phrases.length;
+  const entry = { kind: 'transcribe', provider: 'openrouter', model: TRANSCRIBE_MODEL, at: nowIso(),
+    audioBytes: audio.length, phraseCount: phrases.length, language: lang, zdr: true,
+    ...(omitted > 0 && { omittedPhraseCount: omitted, warning: `轉錄術語上限 200，已送出前 200 個，略過 ${omitted} 個；後續校對清單不受此限制。` }) };
+  console.info('[transcribe] start', JSON.stringify({ meetingId, ...entry }));
+  let res;
+  try {
+    res = await fetch('https://openrouter.ai/api/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(10 * 60 * 1000),
+      body: JSON.stringify({
+        model: TRANSCRIBE_MODEL,
+        input_audio: { data: audio.toString('base64'), format: 'mp3' },
+        ...(lang !== 'auto' && { language: lang.split('-')[0] }),
+        response_format: 'verbose_json',
+        timestamp_granularities: ['segment'],
+        provider: { zdr: true, options: { azure: { diarization: { enabled: true }, ...(phrases.length && { phraseList: { phrases } }) } } },
+      }),
+    });
+    entry.httpStatus = res.status;
+    const requestId = res.headers.get('x-request-id');
+    if (requestId && /^[\w:.-]{1,100}$/.test(requestId)) entry.requestId = requestId;
+    if (!res.ok) {
+      // Do not echo provider bodies: they may contain audio, terms or credentials.
+      await res.body?.cancel();
+      throw new Error(`OpenRouter ${res.status}: ${transcriptionFailure(res.status)}`);
+    }
+    const t = parseTranscription(await res.json());
+    log.push({ ...entry, ms: Date.now() - started, audioSeconds: t.audioSeconds, costUsd: t.costUsd });
+    console.info('[transcribe] done', JSON.stringify({ meetingId, ...log.at(-1) }));
+    return t;
+  } catch {
+    const message = res && !res.ok ? `OpenRouter ${res.status}: ${transcriptionFailure(res.status)}`
+      : '轉錄連線中斷、逾時或回應格式錯誤，請檢查網路並執行轉錄診斷。';
+    const failed = { ...entry, ms: Date.now() - started, error: message };
+    log.push(failed);
+    console.error('[transcribe] failed', JSON.stringify({ meetingId, ...failed }));
+    throw new Error(`${message}（模型 ${TRANSCRIBE_MODEL}；音訊 ${audio.length} bytes；術語 ${phrases.length} 個；耗時 ${failed.ms} ms${entry.requestId ? `；request ID ${entry.requestId}` : ''}）${entry.warning ?? ''}`);
+  }
+}
+
+export async function debugTranscription() {
+  const checks = [], key = openrouterKey();
+  const result = () => {
+    const report = { ok: checks.every(c => c.ok), at: nowIso(), model: TRANSCRIBE_MODEL, checks,
+      message: checks.every(c => c.ok) ? '轉錄診斷通過；短音訊與目前團隊術語可被接受，不代表長錄音或辨識品質已驗證。' : '轉錄診斷失敗，請依各項訊息排查。' };
+    console.info('[transcribe] diagnostic', JSON.stringify(report));
+    return report;
+  };
+  if (!key) {
+    checks.push({ name: 'API key', ok: false, message: 'OPENROUTER_API_KEY 未設定（也找不到 ~/.config/openrouter/key）' });
+    return result();
+  }
+  try {
+    const res = await fetch('https://openrouter.ai/api/v1/key', { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(15000) });
+    if (!res.ok) {
+      await res.body?.cancel();
+      checks.push({ name: 'API key', ok: false, message: `OpenRouter ${res.status}: ${transcriptionFailure(res.status)}` });
+      return result();
+    }
+    const { data } = await res.json(), remaining = data?.limit_remaining;
+    checks.push({ name: 'API key', ok: !(typeof remaining === 'number' && remaining <= 0),
+      message: typeof remaining === 'number' ? `這把 API key 剩餘額度 US$${remaining.toFixed(4)}（不是帳戶總餘額）。` : '金鑰驗證成功；未設定 key 額度上限。' });
+  } catch {
+    checks.push({ name: 'API key', ok: false, message: '無法取得 OpenRouter 金鑰狀態，請檢查網路。' });
+    return result();
+  }
+  if (!checks.at(-1).ok) return result();
+  const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'meeting-transcription-test-'));
+  try {
+    const mp3 = path.join(tmp, 'test.mp3'), log = [];
+    await promisify(execFile)('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'anullsrc=r=16000:cl=mono', '-t', '1', '-b:a', '48k', mp3]);
+    checks.push({ name: 'ffmpeg', ok: true, message: '已產生 1 秒靜音測試檔，不讀取會議錄音。' });
+    await requestTranscription(await fsp.readFile(mp3), 'zh-TW', await termsFor({}), log);
+    checks.push({ name: '轉錄 API', ok: true, message: `ZDR、分講者與團隊術語請求成功；術語 ${log[0].phraseCount} 個；耗時 ${log[0].ms} ms。${log[0].warning ?? ''}`, usage: log[0] });
+  } catch (e) {
+    checks.push({ name: checks.at(-1).name === 'ffmpeg' ? '轉錄 API' : 'ffmpeg', ok: false,
+      message: checks.at(-1).name === 'ffmpeg' ? e.message : 'ffmpeg 無法產生測試音訊，請確認已安裝且可執行。' });
+  } finally {
+    await fsp.rm(tmp, { recursive: true, force: true });
+  }
+  return result();
 }
 
 // One usage record per Claude call; thinking tokens are part of output_tokens.
@@ -426,7 +512,7 @@ async function summarize(m, log) {
 
 // ---- Learning loop (docs/plans/2026-10-21-learning-loop.md): team terms, script check, speaker hints, benchmark ----
 const learned = auth.jsonStore(path.join(DATA, 'learned.json'), () => ({ terms: [], rules: [], voices: [], bench: { cases: [], runs: [] } }));
-// shortcut: Azure's phrase-list limit is not documented on OpenRouter; cap here until a larger list is measured.
+// shortcut: cap the merged correction glossary at 500; the transcription API has its own measured 200-phrase limit.
 const MAX_PHRASES = 500;
 
 // The meeting's own terms first, then team terms; case-insensitive dedupe.
@@ -640,6 +726,7 @@ async function processMeeting(id) {
     await update(id, cur => ({ summary, summaryBy, speakerHints, actions: parseActions(summary, cur.actions), status: 'done', summaryStale: false }));
   } catch (e) {
     await update(id, { status: 'error', error: String(e.message ?? e) }).catch(() => {});
+    console.error('[meeting] failed', JSON.stringify({ meetingId: id, message: String(e.message ?? e) }));
   } finally {
     if (log.length) await update(id, cur => ({ usage: [...(cur.usage ?? []), ...log] })).catch(() => {});
   }
@@ -966,6 +1053,9 @@ async function accountRoute(req, res, url, user) {
       return send(res, 200, { usage, settings: d.settings, users: d.users.map(auth.publicUser),
         shares: d.shares.map(s => ({ ...s, meetingTitle: titles[s.meetingId] ?? '（會議已刪除）', createdByName: nameOf(s.createdBy) })) });
     }
+    if (a === 'transcription-test' && req.method === 'POST') {
+      return send(res, 200, await debugTranscription());
+    }
     if (a === 'settings' && req.method === 'PUT') {
       const { registration } = await readJson(req);
       return send(res, 200, await db.mutate(d => { d.settings.registration = registration === true; return d.settings; }));
@@ -1209,7 +1299,11 @@ export const server = http.createServer((req, res) =>
     send(res, e.code === 'ENOENT' ? 404 : e.status ?? (e instanceof SyntaxError ? 400 : 500), { error: e.message });
   }));
 
-if (import.meta.main) {
+if (import.meta.main && process.argv.includes('--debug-transcription')) {
+  const report = await debugTranscription();
+  console.log(JSON.stringify(report, null, 2));
+  process.exitCode = report.ok ? 0 : 1;
+} else if (import.meta.main) {
   const port = Number(process.env.PORT ?? 3000);
   const moved = await migrateLayout();
   if (moved) console.log(`moved ${moved} meeting folder(s) into data/<YYYY-MM-DD>/`);
