@@ -63,8 +63,13 @@ export function parseActions(md, prev = []) {
 const cleanActions = a => Array.isArray(a) ? a.slice(0, 500).map(x => ({
   text: String(x?.text ?? ''), owner: String(x?.owner ?? ''), done: x?.done === true, cite: Number.isInteger(x?.cite) ? x.cite : null,
 })) : undefined;
-// Older meetings lack later fields: fill defaults and derive action items on read.
-const withDefaults = m => ({ scheduledAt: '', location: '', brief: '', tags: [], participants: [], ...m, actions: m.actions ?? parseActions(m.summary) });
+// Older meetings store one recording at the meeting root; expose it as the legacy section on read.
+const sectionsOf = m => Array.isArray(m.sections) ? m.sections : m.file ? [{ id: 'legacy', title: m.originalName || m.title || '錄音', originalName: m.originalName || '', file: m.file, mime: m.mime || 'application/octet-stream', transcribed: !!m.segments?.length }] : [];
+const withDefaults = m => {
+  const sections = sectionsOf(m).map(s => ({ ...s, title: String(s.title ?? s.originalName ?? '錄音'), transcribed: s.transcribed === true }));
+  return { scheduledAt: '', location: '', brief: '', tags: [], participants: [], ...m, sections,
+    segments: (m.segments ?? []).map(s => ({ ...s, sectionId: s.sectionId ?? sections[0]?.id ?? 'legacy' })), actions: m.actions ?? parseActions(m.summary) };
+};
 
 // User-editable meeting properties; invalid values become empty instead of being stored.
 export function cleanMeta({ scheduledAt, location, brief, tags, participants } = {}) {
@@ -88,7 +93,16 @@ export function reassignSpeakers(segments, moves) {
 
 export const speakerName = (m, s) => m.speakers?.[s] || `Speaker ${s < 26 ? String.fromCharCode(65 + s) : s + 1}`;
 export const fmtTime = t => `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
-export const transcriptText = m => m.segments.map((s, i) => `[${i + 1}] ${fmtTime(s.start)} ${speakerName(m, s.speaker)}: ${s.text}`).join('\n');
+export const transcriptText = m => {
+  const sections = sectionsOf(m), headed = sections.length > 1;
+  let last = null;
+  return m.segments.map((s, i) => {
+    const sectionId = s.sectionId ?? sections[0]?.id ?? 'legacy', section = sections.find(x => x.id === sectionId);
+    const heading = headed && sectionId !== last ? `## ${section?.title ?? '錄音'}\n` : '';
+    last = sectionId;
+    return `${heading}[${i + 1}] ${fmtTime(s.start)} ${speakerName(m, s.speaker)}: ${s.text}`;
+  }).join('\n');
+};
 export function extOf(name) {
   const e = path.extname(name ?? '').toLowerCase();
   return /^\.[a-z0-9]{1,5}$/.test(e) ? e : '.bin';
@@ -157,6 +171,65 @@ function update(id, patch) {
   writeQueues.set(id, tail);
   tail.then(() => { if (writeQueues.get(id) === tail) writeQueues.delete(id); });
   return run;
+}
+const BUSY = new Set(['transcribing', 'correcting', 'summarizing']);
+const isBusy = m => BUSY.has(m.status);
+const safeOriginalName = name => path.basename(String(name ?? '').replaceAll('\\', '/')).slice(0, 255) || 'recording.webm';
+const cleanSectionTitle = value => {
+  if (typeof value !== 'string' || !value.trim() || value.trim().length > 200) throw fail(400, '錄音段落標題必須是 1 到 200 字');
+  return value.trim();
+};
+const sectionIdOf = (segment, sections) => segment.sectionId ?? sections[0]?.id ?? 'legacy';
+const remapCitation = (value, remap) => Number.isInteger(value) && value > 0 ? remap.get(value) ?? value : value;
+function remapCitationText(text, remap) {
+  let max = 0;
+  for (const n of remap.keys()) max = Math.max(max, n);
+  return text.replace(/\[((?:\d+\s*[-,，、]\s*)*\d+)\]/g, (match, group) => {
+    const values = [];
+    for (const part of group.split(/[,，、]/)) {
+      const range = /^(\d+)\s*-\s*(\d+)$/.exec(part.trim());
+      if (!range) { values.push(Number(part)); continue; }
+      const [a, b] = range.slice(1).map(Number), lo = Math.min(a, b), hi = Math.max(a, b);
+      if (lo < 1 || hi > max) return match;
+      const step = a <= b ? 1 : -1;
+      for (let n = a; step > 0 ? n <= b : n >= b; n += step) values.push(n);
+    }
+    return `[${values.map(n => remap.get(n) ?? n).join('、')}]`;
+  });
+}
+function remappedReferences(cur, remap) {
+  const changed = [...remap].some(([old, next]) => old !== next) || remap.size !== (cur.segments ?? []).length;
+  return {
+    ...(cur.summary && changed && { summary: remapCitationText(cur.summary, remap) }),
+    ...(cur.actions && changed && { actions: cur.actions.map(a => ({ ...a, cite: remapCitation(a.cite, remap) })) }),
+    ...(cur.comments && changed && { comments: cur.comments.map(c => ({ ...c, seg: remapCitation(c.seg, remap) })) }),
+    ...(cur.speakerHints && changed && { speakerHints: cur.speakerHints.map(h => ({ ...h, evidence: h.evidence?.map(n => remapCitation(n, remap)) })) }),
+  };
+}
+function placeSectionSegments(cur, sectionId, segments, sections) {
+  const ids = sections.map(s => s.id);
+  const entries = (cur.segments ?? []).map((segment, i) => ({ segment, old: i + 1, sectionId: sectionIdOf(segment, sections) }))
+    .filter(x => x.sectionId !== sectionId);
+  entries.push(...segments.map(segment => ({ segment, old: null, sectionId })));
+  const sorted = sections.flatMap(section => entries.filter(x => x.sectionId === section.id));
+  sorted.push(...entries.filter(x => !ids.includes(x.sectionId)));
+  const remap = new Map(sorted.flatMap((x, i) => x.old === null ? [] : [[x.old, i + 1]]));
+  return { segments: sorted.map(x => ({ ...x.segment, sectionId: x.sectionId })), ...remappedReferences(cur, remap),
+    ...(cur.summary && { summaryStale: true }) };
+}
+function reorderSections(cur, proposed) {
+  const current = sectionsOf(cur), ids = current.map(s => s.id);
+  if (!Array.isArray(proposed) || proposed.length !== ids.length || new Set(ids).size !== ids.length) throw fail(400, 'sections 必須是現有錄音段落的完整排列');
+  if (proposed.some(s => !s || typeof s !== 'object' || Object.keys(s).some(k => !['id', 'title'].includes(k)) || typeof s.id !== 'string')
+    || new Set(proposed.map(s => s.id)).size !== ids.length || proposed.some(s => !ids.includes(s.id))) throw fail(400, 'sections 必須是現有錄音段落的完整排列');
+  const ordered = proposed.map(s => ({ ...current.find(x => x.id === s.id), title: cleanSectionTitle(s.title) }));
+  const changed = ordered.some((s, i) => s.id !== current[i].id || s.title !== current[i].title);
+  const entries = (cur.segments ?? []).map((segment, i) => ({ segment, old: i + 1, sectionId: sectionIdOf(segment, current) }));
+  const sorted = ordered.flatMap(section => entries.filter(x => x.sectionId === section.id));
+  sorted.push(...entries.filter(x => !ids.includes(x.sectionId)));
+  const remap = new Map(sorted.map((x, i) => [x.old, i + 1]));
+  return { sections: ordered, segments: sorted.map(x => ({ ...x.segment, sectionId: x.sectionId })), ...remappedReferences(cur, remap),
+    ...(cur.summary && changed && { summaryStale: true }) };
 }
 
 function openrouterKey() {
@@ -503,6 +576,7 @@ async function summarize(m, log) {
         `輸出語言：${m.outputLang || '與逐字稿主要語言相同'}`,
         '必須包含這些段落：## 摘要、## 重點、## 決策、## 待辦事項（格式：- [ ] 事項 — 負責人 [n]）。',
         m.notes && `<user_notes>\n${m.notes}\n</user_notes>`,
+        m.sections.length > 1 && `錄音段落順序（優先於 user_notes 與額外指示，必須遵守）：${m.sections.map((s, i) => `\n${i + 1}. ${s.title}`).join('')}\n各段代表不同時段或會議，請分開整理，摘要依上列順序呈現各段內容，不要交叉合併。`,
         `參與者（指派待辦負責人時只用這些名字；逐字稿的講者標籤已由使用者校正）：\n${attendees(m).map(n => { const r = resolve(n);
           return `- ${n}${r?.team ? `：${r.team}${r.leader ? `，Y leader ${r.leader}` : ''}` : ''}`; }).join('\n')}`,
         `<transcript>\n${transcriptText(m)}\n</transcript>`,
@@ -690,8 +764,10 @@ async function runBench(userId) {
   const { bench } = await learned.read();
   for (const c of bench.cases) {
     try {
-      const m = await load(c.meetingId), ref = JSON.parse(await fsp.readFile(path.join(dir(c.meetingId), 'reference.json'), 'utf8'));
-      const { segments } = await transcribeClean({ ...m, glossary: ref.glossary }, log);
+      const m = withDefaults(await load(c.meetingId)), ref = JSON.parse(await fsp.readFile(path.join(dir(c.meetingId), 'reference.json'), 'utf8'));
+      if (m.sections.length > 1) throw new Error('多段錄音目前不支援 benchmark');
+      const section = m.sections[0];
+      const { segments } = await transcribeClean({ ...m, ...(section && { file: section.file }), glossary: ref.glossary }, log);
       cases.push({ meetingId: c.meetingId, title: m.title, glossary: shortHash(ref.glossary ?? ''),
         ...benchMetrics(ref.segments, segments, await termsFor({ glossary: ref.glossary })) });
     } catch (e) { cases.push({ meetingId: c.meetingId, error: String(e.message ?? e).slice(0, 200) }); }
@@ -709,21 +785,45 @@ async function runBench(userId) {
   await learned.mutate(d => { d.bench.runs = [...d.bench.runs, run].slice(-50); delete d.bench.running; });
   return run;
 }
+function mapSectionSpeakers(cur, sectionId, segments, sections) {
+  const maps = { ...(cur.sectionSpeakerMap ?? {}) }, own = { ...(maps[sectionId] ?? {}) };
+  const used = new Set(Object.entries(maps).filter(([id]) => id !== sectionId).flatMap(([, map]) => Object.values(map)));
+  for (const segment of cur.segments ?? []) if (sectionIdOf(segment, sections) !== sectionId) used.add(segment.speaker);
+  for (const local of new Set(segments.map(s => s.speaker))) {
+    const key = String(local), existing = own[key];
+    if (Number.isInteger(existing) && existing >= 0 && existing < 100 && !used.has(existing)) { used.add(existing); continue; }
+    let next = sectionId === 'legacy' && Number.isInteger(local) && local >= 0 && local < 100 && !used.has(local) ? local : 0;
+    while (used.has(next) && next < 100) next++;
+    if (next >= 100) throw fail(400, '講者數量超過 100 位');
+    own[key] = next; used.add(next);
+  }
+  maps[sectionId] = own;
+  return { sectionSpeakerMap: maps, segments: segments.map(s => ({ ...s, sectionId, speaker: own[String(s.speaker)] })) };
+}
 
 async function processMeeting(id) {
   const log = []; // AI usage of this run, saved even when a later step fails
   try {
-    let m = await load(id);
-    if (!m.segments.length) {
-      await update(id, { status: 'transcribing', error: null });
-      const { language, segments } = await transcribeClean(m, log, () => update(id, { status: 'correcting' }));
-      m = await update(id, { language, segments, status: 'summarizing' });
-    } else {
-      m = await update(id, { status: 'summarizing', error: null });
+    let m = withDefaults(await load(id));
+    for (const section of m.sections.filter(s => !s.transcribed)) {
+      m = withDefaults(await update(id, { status: 'transcribing', error: null }));
+      const { language, segments } = await transcribeClean({ ...m, file: section.file }, log,
+        () => update(id, { status: 'correcting' }));
+      m = withDefaults(await update(id, cur => {
+        const sections = sectionsOf(cur), target = sections.find(s => s.id === section.id);
+        if (!target) throw fail(409, '錄音段落已變更');
+        const mapped = mapSectionSpeakers(cur, section.id, segments, sections);
+        return { language, sectionSpeakerMap: mapped.sectionSpeakerMap,
+          sections: sections.map(s => s.id === section.id ? { ...s, transcribed: true } : s),
+          ...placeSectionSegments(cur, section.id, mapped.segments, sections), status: 'summarizing' };
+      }));
     }
+    m = withDefaults(await update(id, { status: 'summarizing', error: null }));
     // Speaker hints are optional: a failure there must not fail the meeting.
+    const notesSnapshot = m.notes;
     const [{ summary, summaryBy }, speakerHints] = await Promise.all([summarize(m, log), suggestSpeakers(m, log).catch(() => [])]);
-    await update(id, cur => ({ summary, summaryBy, speakerHints, actions: parseActions(summary, cur.actions), status: 'done', summaryStale: false }));
+    await update(id, cur => ({ summary, summaryBy, speakerHints, actions: parseActions(summary, cur.actions), status: 'done',
+      summaryStale: cur.notes !== notesSnapshot }));
   } catch (e) {
     await update(id, { status: 'error', error: String(e.message ?? e) }).catch(() => {});
     console.error('[meeting] failed', JSON.stringify({ meetingId: id, message: String(e.message ?? e) }));
@@ -731,6 +831,7 @@ async function processMeeting(id) {
     if (log.length) await update(id, cur => ({ usage: [...(cur.usage ?? []), ...log] })).catch(() => {});
   }
 }
+
 
 // Meeting time is the user-set scheduledAt (local, no zone) when present, else the upload time.
 // scheduledAt is a GMT+8 wall-clock time; normalize to UTC so old "Z" and new "+08:00" stamps sort together.
@@ -789,8 +890,8 @@ const db = auth.authStore(DATA);
 // The CSV directory merged with every user's self-maintained profile (D-013).
 const loadPeople = async () => auth.mergePeople((await loadDirectory()).people, (await db.read()).users);
 const view = async (m, user) => {
-  const v = enrich(withDefaults(m), resolver(await loadPeople()));
-  return { ...v, perm: auth.permOf(user, v), access: v.access ?? 'view' };
+  const v = enrich(withDefaults(m), resolver(await loadPeople())), { sectionSpeakerMap, ...publicV } = v;
+  return { ...publicV, perm: auth.permOf(user, v), access: v.access ?? 'view' };
 };
 
 async function loadAll() {
@@ -877,45 +978,83 @@ export function searchMeetings(meetings, query) {
 }
 
 async function create(req, url, user) {
-  const name = path.basename(url.searchParams.get('filename') || 'recording.webm');
-  const lang = url.searchParams.get('lang') || 'zh-TW';
-  if (!LANG.test(lang)) throw Object.assign(new Error('lang 格式錯誤'), { status: 400 });
-  const id = randomUUID();
-  const file = `recording${extOf(name)}`;
-  dirs.set(id, path.join(DATA, localDay(), id));
-  await fsp.mkdir(dir(id), { recursive: true });
-  await pipeline(req, fs.createWriteStream(path.join(dir(id), file)));
-  const m = {
-    id, title: url.searchParams.get('title') || name, createdAt: nowIso(),
-    originalName: name, file, mime: req.headers['content-type'] || 'application/octet-stream', lang,
-    glossary: url.searchParams.get('glossary') ?? '',
-    status: 'transcribing', error: null, language: null, segments: [], speakers: {},
-    notes: '', summary: '', template: 'auto', instructions: '', outputLang: '',
-    scheduledAt: '', location: '', brief: '', tags: [], ...cleanMeta(Object.fromEntries(url.searchParams)),
-    ownerId: user.id, access: auth.ACCESS.includes(url.searchParams.get('access')) ? url.searchParams.get('access') : 'view',
-    agentId: cleanAgentId(url.searchParams.get('agentId')),
-    grants: [], comments: [],
-  };
+  const id = randomUUID(), jsonBody = /^application\/json\b/i.test(req.headers['content-type'] ?? '');
+  let m;
+  if (jsonBody) {
+    const body = await readJson(req);
+    if (!body || Array.isArray(body) || typeof body !== 'object') throw fail(400, '會議資料格式錯誤');
+    const lang = body.lang ?? 'zh-TW';
+    if (typeof lang !== 'string' || !LANG.test(lang)) throw fail(400, 'lang 格式錯誤');
+    const notes = body.notes ?? '';
+    if (typeof notes !== 'string') throw fail(400, 'notes 必須是文字');
+    if (notes.length > 1e6) throw fail(413, 'notes 超過 1 MB');
+    dirs.set(id, path.join(DATA, localDay(), id));
+    await fsp.mkdir(dir(id), { recursive: true });
+    m = { id, title: String(body.title ?? '').trim().slice(0, 200) || '未命名會議', createdAt: nowIso(),
+      originalName: '', file: null, mime: null, lang, glossary: String(body.glossary ?? ''), sections: [], sectionSpeakerMap: {},
+      status: 'draft', error: null, language: null, segments: [], speakers: {}, notes, summary: '', template: 'auto', instructions: '', outputLang: '',
+      scheduledAt: '', location: '', brief: '', tags: [], participants: [], ...cleanMeta(body), ownerId: user.id, access: 'view', agentId: cleanAgentId(body.agentId), grants: [], comments: [] };
+  } else {
+    const name = safeOriginalName(url.searchParams.get('filename') || 'recording.webm');
+    const lang = url.searchParams.get('lang') || 'zh-TW';
+    if (!LANG.test(lang)) throw fail(400, 'lang 格式錯誤');
+    dirs.set(id, path.join(DATA, localDay(), id));
+    await fsp.mkdir(dir(id), { recursive: true });
+    const file = `recording${extOf(name)}`, mime = req.headers['content-type'] || 'application/octet-stream';
+    await pipeline(req, fs.createWriteStream(path.join(dir(id), file)));
+    const title = String(url.searchParams.get('title') || name).trim().slice(0, 200) || name;
+    m = { id, title, createdAt: nowIso(), originalName: name, file, mime, lang,
+      glossary: url.searchParams.get('glossary') ?? '', sections: [{ id: 'legacy', title, originalName: name, file, mime, transcribed: false }], sectionSpeakerMap: {},
+      status: 'transcribing', error: null, language: null, segments: [], speakers: {}, notes: '', summary: '', template: 'auto', instructions: '', outputLang: '',
+      scheduledAt: '', location: '', brief: '', tags: [], participants: [], ...cleanMeta(Object.fromEntries(url.searchParams)), ownerId: user.id,
+      access: auth.ACCESS.includes(url.searchParams.get('access')) ? url.searchParams.get('access') : 'view',
+      agentId: cleanAgentId(url.searchParams.get('agentId')), grants: [], comments: [] };
+  }
   await save(m);
   await learnTerms(parseTerms(m.glossary), `meeting:${id}`, user.id);
-  processMeeting(id);
-  return m;
+  if (!jsonBody) processMeeting(id);
+  const { sectionSpeakerMap, ...publicM } = m;
+  return publicM;
 }
 
 async function readJson(req) {
   let body = '';
+  req.setEncoding('utf8');
   for await (const c of req) {
     body += c;
     if (body.length > 1e6) throw Object.assign(new Error('body too large'), { status: 413 });
   }
   return JSON.parse(body || '{}');
 }
+async function appendSection(req, url, m, user) {
+  const name = safeOriginalName(url.searchParams.get('filename') || 'recording.webm');
+  const title = cleanSectionTitle(url.searchParams.get('title') ?? name), sectionId = randomUUID();
+  const file = `recording-${sectionId}${extOf(name)}`, staging = `.upload-${sectionId}.tmp`;
+  let published = false, saved;
+  try {
+    await pipeline(req, fs.createWriteStream(path.join(dir(m.id), staging), { flags: 'wx' }));
+    saved = await update(m.id, async cur => {
+      if (isBusy(cur)) throw fail(409, '處理中，不能新增錄音段落');
+      const sections = sectionsOf(cur);
+      await fsp.rename(path.join(dir(m.id), staging), path.join(dir(m.id), file));
+      published = true;
+      const section = { id: sectionId, title, originalName: name, file, mime: req.headers['content-type'] || 'application/octet-stream', transcribed: false };
+      return { sections: [...sections, section], ...(cur.summary && { summaryStale: true }) };
+    });
+  } catch (e) {
+    await fsp.rm(path.join(dir(m.id), staging), { force: true });
+    if (published) await fsp.rm(path.join(dir(m.id), file), { force: true });
+    throw e;
+  }
+  return view(saved, user);
+}
 
-async function sendAudio(req, res, m, download) {
-  const file = path.join(dir(m.id), m.file);
+async function sendAudio(req, res, m, section, download) {
+  if (typeof section?.file !== 'string' || section.file.includes('\\') || path.basename(section.file) !== section.file) throw fail(404, '錄音不存在');
+  const file = path.join(dir(m.id), section.file);
   const { size } = await fsp.stat(file);
-  const headers = { 'Content-Type': m.mime, 'Accept-Ranges': 'bytes' };
-  if (download) headers['Content-Disposition'] = `attachment; filename*=UTF-8''${encodeURIComponent(m.originalName)}`;
+  const headers = { 'Content-Type': section.mime || 'application/octet-stream', 'Accept-Ranges': 'bytes' };
+  if (download) headers['Content-Disposition'] = `attachment; filename*=UTF-8''${encodeURIComponent(section.originalName || section.file)}`;
   const r = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range ?? '');
   if (r && !download) {
     const start = r[1] ? +r[1] : Math.max(0, size - +r[2]);
@@ -930,6 +1069,7 @@ async function sendAudio(req, res, m, download) {
   res.writeHead(200, { ...headers, 'Content-Length': size });
   return pipeline(fs.createReadStream(file), res);
 }
+
 
 const send = (res, status, body, headers = {}) => {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', ...headers });
@@ -1219,23 +1359,38 @@ async function route(req, res) {
   const perm = auth.permOf(user, m), can = level => auth.rank(perm) >= auth.rank(level);
   need(can('view'), 404, 'not found'); // don't reveal meetings the user cannot see
   if (!action && req.method === 'GET') return send(res, 200, await view(m, user));
+  if (action === 'sections' && req.method === 'POST') {
+    need(can('edit'), 403, '你只有檢視或留言權限');
+    need(!isBusy(m), 409, '處理中，請稍候');
+    return send(res, 200, await appendSection(req, url, m, user));
+  }
   if (!action && req.method === 'PATCH') {
     const body = await readJson(req);
-    const { title, notes, glossary, actions, access, agentId } = body;
-    const speakers = cleanSpeakers(body.speakers);
+    if (!body || Array.isArray(body) || typeof body !== 'object') throw fail(400, '會議資料格式錯誤');
+    const { title, notes, glossary, actions, access, agentId, lang } = body;
+    if (lang !== undefined && (typeof lang !== 'string' || !LANG.test(lang))) throw fail(400, 'lang 格式錯誤');
+    if (notes !== undefined && (typeof notes !== 'string' || notes.length > 1e6)) throw fail(400, 'notes 必須是 1 MB 以內的文字');
+    const speakers = cleanSpeakers(body.speakers), hasSections = body.sections !== undefined;
     if (access !== undefined) need(can('owner') && auth.ACCESS.includes(access), 403, '只有擁有者能變更權限');
-    const patch = Object.fromEntries(Object.entries({ title, speakers, notes, glossary, actions: cleanActions(actions), agentId: agentId === undefined ? undefined : cleanAgentId(agentId), ...cleanMeta(body) })
-      .filter(([, v]) => v !== undefined));
-    if (Object.keys(patch).length || body.segSpeakers !== undefined) need(can('edit'), 403, '你只有檢視或留言權限');
+    const patch = Object.fromEntries(Object.entries({ title, notes, glossary, lang, actions: cleanActions(actions), speakers,
+      agentId: agentId === undefined ? undefined : cleanAgentId(agentId), ...cleanMeta(body) }).filter(([, v]) => v !== undefined));
+    if (Object.keys(patch).length || body.segSpeakers !== undefined || hasSections) need(can('edit'), 403, '你只有檢視或留言權限');
+    const updated = await update(id, cur => {
+      if (lang !== undefined && isBusy(cur)) throw fail(409, '處理中，不能變更語言');
+      const sectionPatch = hasSections ? (() => { if (isBusy(cur)) throw fail(409, '處理中，不能修改錄音段落'); return reorderSections(cur, body.sections); })() : {};
+      const segments = reassignSpeakers(sectionPatch.segments ?? cur.segments ?? [], body.segSpeakers);
+      const stale = cur.summary && (speakers || segments || patch.participants || (patch.notes !== undefined && patch.notes !== cur.notes));
+      return { ...patch, ...sectionPatch, ...(segments && { segments }), ...(stale && { summaryStale: true }), ...(access !== undefined && { access }) };
+    });
     if (glossary !== undefined) await learnTerms(parseTerms(glossary), `meeting:${id}`, user.id);
-    return send(res, 200, await view(await update(id, cur => {
-      const segments = reassignSpeakers(cur.segments, body.segSpeakers); // against the current transcript, inside the write queue
-      // Who said what changed after the summary was written: flag it so the UI offers a regenerate.
-      const stale = cur.summary && (speakers || segments || patch.participants);
-      return { ...patch, ...(segments && { segments }), ...(stale && { summaryStale: true }), ...(access !== undefined && { access }) };
-    }), user));
+    return send(res, 200, await view(updated, user));
   }
-  if (action === 'audio' && req.method === 'GET') return sendAudio(req, res, m, url.searchParams.has('download'));
+  if (action === 'audio' && req.method === 'GET') {
+    const sections = sectionsOf(m), sectionId = url.searchParams.get('section');
+    const section = sectionId === null ? sections[0] : sections.find(s => s.id === sectionId);
+    need(section?.file, 404, '錄音不存在');
+    return sendAudio(req, res, m, section, url.searchParams.has('download'));
+  }
   if (action === 'comments' && req.method === 'POST') {
     need(can('comment'), 403, '你沒有留言權限');
     const { text, seg } = await readJson(req);
@@ -1266,6 +1421,7 @@ async function route(req, res) {
     const ref = path.join(dir(id), 'reference.json');
     if (req.method === 'POST') {
       need(m.status === 'done' && m.segments.length, 409, '會議處理完成後才能凍結');
+      need(sectionsOf(m).length <= 1, 409, '多段錄音目前不支援 benchmark');
       // Freeze what the user corrected: speaker names and text, without uncertainty marks.
       await fsp.writeFile(ref, JSON.stringify({ frozenAt: nowIso(), frozenBy: user.id, lang: m.lang, glossary: m.glossary,
         segments: m.segments.map(s => ({ start: s.start, end: s.end, speaker: speakerName(m, s.speaker), text: s.text.replaceAll('【?】', '') })) }, null, 2));
@@ -1280,15 +1436,21 @@ async function route(req, res) {
   }
   need(can('edit'), 403, '你只有檢視或留言權限');
   if (action === 'summarize' && req.method === 'POST') {
-    if (['transcribing', 'correcting', 'summarizing'].includes(m.status)) return send(res, 409, { error: '處理中，請稍候' });
-    const { template = 'auto', instructions = '', outputLang = '', retranscribe = false, agentId } = await readJson(req);
-    if (!TEMPLATES[template]) return send(res, 400, { error: 'template 不存在' });
-    const updated = await update(id, {
-      template, instructions: String(instructions), outputLang: String(outputLang), ...(agentId !== undefined && { agentId: cleanAgentId(agentId) }),
-      ...(retranscribe && { segments: [] }),
+    const body = await readJson(req);
+    if (!body || Array.isArray(body) || typeof body !== 'object') throw fail(400, '摘要設定格式錯誤');
+    const { template = 'auto', instructions = '', outputLang = '', retranscribe = false, agentId } = body;
+    if (!TEMPLATES[template]) throw fail(400, 'template 不存在');
+    const updated = await update(id, cur => {
+      if (isBusy(cur)) throw fail(409, '處理中，請稍候');
+      const sections = sectionsOf(cur);
+      if (!sections.length) throw fail(400, '沒有錄音段落，無法摘要');
+      const next = retranscribe === true ? sections.map(s => ({ ...s, transcribed: false })) : sections;
+      return { template, instructions: String(instructions), outputLang: String(outputLang), ...(agentId !== undefined && { agentId: cleanAgentId(agentId) }),
+        sections: next, ...(retranscribe === true && { segments: [], language: null, speakerHints: [], summaryStale: !!cur.summary }),
+        status: next.some(s => !s.transcribed) ? 'transcribing' : 'summarizing', error: null };
     });
     processMeeting(id);
-    return send(res, 202, updated);
+    return send(res, 202, await view(updated, user));
   }
   send(res, 405, { error: 'method not allowed' });
 }

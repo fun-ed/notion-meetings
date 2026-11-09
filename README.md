@@ -11,6 +11,8 @@ Releases: <https://github.com/fun-ed/notion-meetings/releases> · Changes: [CHAN
 ## Features
 
 - Microphone recording or upload of audio and video (mp4, mov, m4a, mp3, wav, webm). The original file is kept and can be downloaded.
+- Markdown notes (0.10.0): write notes before adding media. Notes autosave and have a preview for headings, lists, checkboxes, links and code blocks.
+- Add multiple audio or video files to one meeting page. Each file becomes a named section in the order added; move sections up or down, play or download each file, then generate a combined summary. Related meetings can share a page while keeping their transcript sections separate.
 - Transcription with MAI-Transcribe 2 through OpenRouter (zero data retention), OpenCC conversion to Taiwan wording, and a Claude pass that fixes only glossary terms. Every edit is checked: anything other than a change into a glossary term or an added 【?】 is reverted. Unsure words are marked 【?】 and the raw output is kept.
 - Speaker correction: rename speakers, reassign one segment or a range, merge two speakers, and add participants who did not speak.
 - Learning loop: meeting terms become a team glossary applied to every transcription; Hangul or kana in a Chinese transcript is flagged 【?】; Claude suggests who each speaker is from name cues ("thanks, X"), and you apply a suggestion with one click; corrected meetings can be frozen as a benchmark to track speaker accuracy and CER.

@@ -15,15 +15,16 @@
 ```text
 瀏覽器
   ├─ 錄音：MediaRecorder（webm/opus 或 mp4），即時字幕預設關閉，勾選後只用本機 Web Speech 辨識（D-019）
-  └─ 上傳：mp4 / mov / m4a / mp3 / wav / webm …
-        │  POST /api/meetings?filename&lang&title&glossary   （request body 就是檔案本身）
+  └─ 新增會議：POST /api/meetings（JSON）建立草稿，可先儲存 Markdown 筆記
+        │  POST /api/meetings/:id/sections?filename&title（body 是檔案本身，依序上傳）
         ▼
-server.js  create()
-  data/<YYYY-MM-DD>/<id>/recording.<ext>   原始檔，當附件下載（日期是 GMT+8 的上傳日）
-  data/<YYYY-MM-DD>/<id>/meeting.json      會議資料
+server.js  create() / appendSection()
+  data/<YYYY-MM-DD>/<id>/recording-<sectionId>.<ext>   每個 section 的原始檔
+  data/<YYYY-MM-DD>/<id>/meeting.json                 筆記、section 順序與轉錄結果
+        │  使用者命名、排序後 POST /api/meetings/:id/summarize
         │  processMeeting(id)，背景執行
         ▼
-  transcribing  ffmpeg → 單聲道 16 kHz 48 kbps mp3（暫存 transcode.mp3，用完刪除）
+  transcribing  依 section 順序處理尚未轉錄的檔案；每個檔案 ffmpeg → 單聲道 16 kHz 48 kbps mp3
                 → OpenRouter microsoft/mai-transcribe-2
                   provider.zdr=true，azure.diarization，azure.phraseList（有術語時）
   （zh-TW 或自動偵測為中文）
@@ -36,6 +37,10 @@ server.js  create()
 ```
 
 前端每 2 秒輪詢 `GET /api/meetings/:id`，直到狀態不是 `transcribing`、`correcting` 或 `summarizing`。使用者正在輸入時，輪詢不會重畫頁面。
+
+新介面先建立 `draft`，筆記輸入停止 500 毫秒後儲存，也可按「儲存筆記」。Markdown 預覽會跳脫原始 HTML，連結只接受 HTTP、HTTPS、mailto 與頁面錨點。唯讀使用者直接看預覽。加入檔案不會自動呼叫 AI，使用者按「產生會議筆記」後才開始。舊的原始檔 `POST /api/meetings?filename=...` 仍保留上傳後自動處理的行為。
+
+每個 section 的時間由 00:00 起算，講者編號分開配置。頁面提供逐檔播放與下載；摘要引用會切到對應檔案的時間。調整 section 順序會同步重排逐字稿與既有引用，並提示重新產生摘要。檔名與檔案路徑由伺服器管理，排序 API 只能送既有 section 的 id 與標題。
 
 介面路由（hash）：`#` 會議紀錄資料庫、`#new` 新會議、`#search=<查詢>` 搜尋、`#actions` Action Items、`#people` 成員與團隊、`#me` 個人設定、`#admin` 管理後台、`#share/<token>` 開啟分享連結、`#<id>` 會議頁；`#<id>:seg-<n>` 會開啟逐字稿並跳到第 n 段，`#<id>:notes` 開啟筆記分頁。
 
@@ -81,18 +86,20 @@ summarizing：summarize() 與 suggestSpeakers() 同時執行；建議失敗不�
 | 欄位 | 說明 |
 |---|---|
 | `id`, `title`, `createdAt` | 識別與顯示 |
-| `originalName`, `file`, `mime` | 原始檔名、儲存檔名（`recording.<ext>`）、上傳時的 Content-Type |
+| `originalName`, `file`, `mime` | 舊版單檔欄位，保留舊上傳 API 相容性；舊檔讀取時視為 `legacy` section |
+| `sections[]` | 依使用者順序排列的 `{id, title, originalName, file, mime, transcribed}`；標題可改，檔案欄位不接受 PATCH |
+| `sectionSpeakerMap` | 伺服器內部保存各 section 原始講者到會議講者編號的對照，重新轉錄時重用；不由 API 回傳或接受使用者修改 |
 | `lang` | 使用者選的語言：`zh-TW`（預設）、`auto`、`zh-CN`、`en`、`ja`… 送給 MAI 時取 `-` 前面的部分 |
 | `glossary` | 術語清單原文；`parseTerms()` 以逗號、頓號、分號、換行切分並去重 |
 | `status`, `error` | 處理狀態與錯誤訊息 |
 | `language` | MAI 偵測到的語言 |
-| `segments[]` | `{start, end, speaker, text, raw}`；`text` 是轉換與校對後版本，`raw` 是 MAI 原始輸出 |
+| `segments[]` | `{start, end, speaker, text, raw, sectionId}`；時間相對各 section；`text` 是轉換與校對後版本，`raw` 是 MAI 原始輸出 |
 | `speakers` | `{ "0": "Amy" }`，講者改名對照；由 `cleanSpeakers()` 驗證 |
 | `participants` | 手動加入的參與者（可能沒發言）；參與者＝逐字稿講者＋這份名單 |
-| `summaryStale` | 摘要完成後改了講者、段落講者或參與者時為 `true`，介面提示重新產生摘要；摘要完成時清掉 |
+| `summaryStale` | 已有摘要時改了筆記、講者、參與者或 section，標為 `true` 並提示重新產生；產生期間又改筆記時保留提示 |
 | `speakerHints` | `[{speaker, name, evidence: [行號], reason}]`，講者名字建議（D-020），按「套用」才改名 |
 | `benchmarkAt` | 凍結為 benchmark 的時間；參考答案在同一資料夾的 `reference.json` |
-| `notes` | 使用者手寫筆記，摘要時一起參考 |
+| `notes` | 使用者手寫 Markdown 筆記，可在沒有媒體的草稿中儲存；摘要時一起參考 |
 | `summary`, `template`, `instructions`, `outputLang` | 摘要內容與產生設定；`template` 也是介面上的「類型」 |
 | `scheduledAt`, `location`, `brief`, `tags` | 使用者設定的會議時間（`YYYY-MM-DDTHH:mm`，本機時間）、地點、一句話摘要、標籤；由 `cleanMeta()` 驗證，格式不對就存成空值 |
 | `ownerId`, `access`, `grants[]` | 擁有者、其他登入者的權限（private／view／comment／edit）、分享連結授權 `{userId, perm, token}` |
@@ -120,9 +127,11 @@ summarizing：summarize() 與 suggestSpeakers() 同時執行；建議失敗不�
 | `GET /api/search?q=` | 搜尋，回傳 `{terms, results[]}`；語法與計分見 D-011 |
 | `GET` / `PUT /api/directory` | 讀取或以 `{csv}` 覆寫名錄，回傳 `{people, csv}`；存在 `data/directory.json` |
 | `POST /api/meetings?filename&lang&title&glossary&scheduledAt&location&brief&tags` | 上傳並開始處理 |
+| `POST /api/meetings`，JSON body | 建立無媒體的 `draft`，可指定筆記與會議屬性，不呼叫 AI |
+| `POST /api/meetings/:id/sections?filename&title` | 加入一個音訊或影片 section，需 edit；依請求加入順序附加，不啟動轉錄 |
 | `GET /api/meetings/:id` | 會議資料 |
-| `PATCH /api/meetings/:id` | 只接受 `title`、`speakers`、`notes`、`glossary`、`actions`、`scheduledAt`、`location`、`brief`、`tags`；`actions` 會被清理成固定欄位，最多 500 筆 |
-| `GET /api/meetings/:id/audio` | 播放，支援 Range；加 `?download` 會用原檔名下載 |
+| `PATCH /api/meetings/:id` | 接受 `title`、`speakers`、`notes`、`glossary`、`actions`、`scheduledAt`、`location`、`brief`、`tags`、`participants`、`agentId`、`lang`、`segSpeakers`，`access` 限 owner。`sections: [{id,title},…]` 必須是全部既有 section 的完整排列，用於命名與排序。處理中拒絕 section 與語言變更 |
+| `GET /api/meetings/:id/audio?section=<id>` | 播放指定 section，省略時取第一個；支援 Range 與 `?download`，沒有媒體回 404 |
 | `GET /api/learned` | 管理員：整份學習資料；其他人：只有啟用的團隊術語 |
 | `POST /api/learned/terms` `{term}` | 新增團隊術語（唯讀帳號不行）；`PATCH` `{term, enabled}`、`DELETE ?term=` 限管理員 |
 | `PUT /api/admin/ai/keys` `{modelId, key}` | 管理員設定該模型 Endpoint 的 API key；空字串＝清除。存在 `secrets.json`（600），回應只有 `keyStatus {set, last4, setAt}` |
@@ -130,7 +139,7 @@ summarizing：summarize() 與 suggestSpeakers() 同時執行；建議失敗不�
 | `POST /api/admin/ai/models/:id/list` | 讀取 OpenAI 相容端點的 `GET /models`，回傳模型 ID 清單 |
 | `POST /api/learned/bench` | 管理員執行 benchmark，回 202；沒有案例回 400、執行中回 409 |
 | `POST`／`DELETE /api/meetings/:id/benchmark` | 擁有者凍結或取消凍結；會議尚未完成回 409 |
-| `POST /api/meetings/:id/summarize` | `{template, instructions, outputLang, retranscribe}`；`retranscribe: true` 會清空逐字稿並從轉錄重跑；處理中回 409 |
+| `POST /api/meetings/:id/summarize` | `{template, instructions, outputLang, retranscribe}`；依目前 section 順序轉錄待處理檔案並摘要。`retranscribe: true` 重跑所有 section；處理中回 409，沒有媒體回 400 |
 
 ## LLM 呼叫（D-021）
 
@@ -164,10 +173,12 @@ summarizing：summarize() 與 suggestSpeakers() 同時執行；建議失敗不�
 
 程式裡用 `shortcut:` 註解標出，對應的後續工作在 [plans/2026-10-20-roadmap.md](plans/2026-10-20-roadmap.md)。
 
-- 整場會議用一個 base64 請求送轉錄；會議很長時，OpenRouter 可能回 413。
-- 術語校對一次送完整逐字稿，輸出上限是 64k tokens。
+- 每個媒體檔用一個 base64 請求送轉錄；單一檔案很長時，OpenRouter 可能回 413。
+- 每個媒體檔的術語校對一次送該檔的完整逐字稿，輸出上限是 64k tokens；整體摘要仍受模型 context window 限制。
 - 錄音停止前，資料都在瀏覽器記憶體裡，分頁當掉就會遺失。
 - MediaRecorder 產生的 webm 沒有時長資訊，播放時拖曳跳段可能不準。
+- Markdown 預覽涵蓋常用筆記語法，尚未處理表格與巢狀清單，也不執行原始 HTML。
+- Benchmark 目前只接受單一 section，避免把不同檔案從 00:00 起算的時間軸誤當成重疊發言；多 section 的轉錄與摘要不受影響。
 
 ## 轉錄診斷
 

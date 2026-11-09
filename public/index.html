@@ -191,6 +191,24 @@
   table.usage { font-size:12px; margin:4px 0 8px; } table.usage tbody tr { cursor:default; }
   table.usage tr.err td { color:var(--red); }
   .share-row input { flex:1; min-width:280px; border:1px solid var(--line); border-radius:6px; padding:2px 6px; font-size:12px; }
+  .notes-tools, .section-row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .media-section { padding:10px 0; border-bottom:1px solid var(--line); }
+  .section-row + .section-row { margin-top:6px; font-size:13px; }
+  .section-row input { flex:1; min-width:100px; border:1px solid var(--line); border-radius:4px; padding:3px 6px; }
+  .section-row a { overflow-wrap:anywhere; min-width:0; }
+  .section-heading { margin:20px 0 8px; font-size:17px; border-bottom:1px solid var(--line); }
+  .markdown { overflow-wrap:anywhere; }
+  .markdown h1 { font-size:26px; } .markdown h2 { font-size:22px; } .markdown h3 { font-size:18px; }
+  .markdown p { margin:8px 0; white-space:pre-wrap; }
+  .markdown pre { overflow:auto; background:var(--code-bg); padding:12px; border-radius:4px; }
+  .markdown blockquote { margin:8px 0; padding-left:12px; border-left:3px solid var(--line); color:var(--muted); }
+  .notes-tools button:focus-visible, .section-row button:focus-visible, .section-row input:focus-visible, .notes:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  [hidden] { display:none !important; }
+  @media (max-width:700px) {
+    .page { padding:20px 20px 80px; } .prop { grid-template-columns:100px minmax(0, 1fr); }
+    .ai-head, .player { flex-wrap:wrap; } .ai-head .spacer, .player .spacer { display:none; }
+    .ai-head .muted, .ai-head button, .player button, .player .muted { white-space:nowrap; flex-shrink:0; }
+  }
 </style>
 </head>
 <body>
@@ -224,7 +242,7 @@ const dt = iso => new Date(iso).toLocaleString('zh-TW', { timeZone: TZ, hour12: 
 const spk = (m, s) => m.speakers?.[s] || `Speaker ${s < 26 ? String.fromCharCode(65 + s) : s + 1}`;
 const COLORS = ['#2383e2', '#d9730d', '#0f7b6c', '#9065b0', '#c14c8a', '#64473a'];
 const TYPES = { auto: ['自動', 'gray'], team: ['團隊會議', 'blue'], standup: ['站立會議', 'green'], sales: ['業務會議', 'orange'] };
-const STATUS = { transcribing: ['轉錄中', 'yellow'], correcting: ['校對術語中', 'yellow'], summarizing: ['產生摘要中', 'yellow'], done: ['完成', 'green'], error: ['失敗', 'red'] };
+const STATUS = { draft: ['草稿', 'gray'], transcribing: ['轉錄中', 'yellow'], correcting: ['校對術語中', 'yellow'], summarizing: ['產生摘要中', 'yellow'], done: ['完成', 'green'], error: ['失敗', 'red'] };
 const BUSY = ['transcribing', 'correcting', 'summarizing'];
 const LANGS = [['zh-TW', '中文（台灣，含中英夾雜）'], ['auto', '自動偵測'], ['zh-CN', '中文（簡體）'], ['en', 'English'], ['ja', '日本語'], ['ko', '한국어'],
   ['es', 'Español'], ['fr', 'Français'], ['de', 'Deutsch'], ['pt', 'Português'], ['ru', 'Русский'], ['th', 'ไทย'], ['vi', 'Tiếng Việt'],
@@ -721,58 +739,140 @@ async function saveDir() {
 }
 
 // ---- 新會議 ----
-function addNewTag(i) {
-  const t = allTags()[i], cur = $('#tags').value.split(/[,，、]/).map(x => x.trim()).filter(Boolean);
-  if (!cur.includes(t)) $('#tags').value = [...cur, t].join(', ');
+
+// Raw HTML is escaped; Markdown links accept only explicit safe schemes or local anchors.
+// shortcut: preview covers common note syntax; use a maintained parser if nested Markdown or tables become required.
+function markdown(text) {
+  const inline = value => {
+    const code = [];
+    return esc(value).replace(/`([^`]+)`/g, (_, s) => `\u0000${code.push(`<code>${s}</code>`) - 1}\u0000`)
+      .replace(/\[([^\]]+)\]\(([^\s)]+)\)/g, (_, label, href) => /^(https?:\/\/|mailto:|#)/i.test(href) ? `<a href="${href}" rel="noreferrer">${label}</a>` : label)
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/~~(.+?)~~/g, '<del>$1</del>')
+      .replace(/\*([^*]+)\*/g, '<em>$1</em>').replace(/\u0000(\d+)\u0000/g, (_, i) => code[+i]);
+  };
+  const lines = String(text ?? '').replace(/\r\n?/g, '\n').split('\n'), out = [];
+  let list = '', fence = false, code = [];
+  const closeList = () => { if (list) out.push(`</${list}>`); list = ''; };
+  for (const line of lines) {
+    if (/^\s*```/.test(line)) {
+      closeList();
+      if (fence) { out.push(`<pre><code>${esc(code.join('\n'))}</code></pre>`); code = []; }
+      fence = !fence;
+      continue;
+    }
+    if (fence) { code.push(line); continue; }
+    const item = /^\s*(?:([-+*])|\d+[.)])\s+(.+)$/.exec(line);
+    if (item) {
+      const type = item[1] ? 'ul' : 'ol';
+      if (list !== type) { closeList(); list = type; out.push(`<${list}>`); }
+      const task = /^\[([ xX])\]\s+(.*)$/.exec(item[2]);
+      out.push(`<li>${task ? `<input type="checkbox" disabled ${task[1] !== ' ' ? 'checked' : ''}> ${inline(task[2])}` : inline(item[2])}</li>`);
+      continue;
+    }
+    closeList();
+    const heading = /^(#{1,6})\s+(.+)$/.exec(line);
+    if (heading) out.push(`<h${heading[1].length}>${inline(heading[2])}</h${heading[1].length}>`);
+    else if (/^\s*([-*_])(?:\s*\1){2,}\s*$/.test(line)) out.push('<hr>');
+    else if (/^>\s?/.test(line)) out.push(`<blockquote>${inline(line.replace(/^>\s?/, ''))}</blockquote>`);
+    else if (line.trim()) out.push(`<p>${inline(line)}</p>`);
+  }
+  closeList();
+  if (fence) out.push(`<pre><code>${esc(code.join('\n'))}</code></pre>`);
+  return out.join('\n');
 }
 
+const pendingNotes = new Map();
+let notesTimer, notesWrites = Promise.resolve();
+function editNotes(value) {
+  current.notes = value;
+  pendingNotes.set(current.id, value);
+  $('#notes-status').textContent = '尚未儲存';
+  clearTimeout(notesTimer);
+  notesTimer = setTimeout(() => saveNotes().catch(() => {}), 500);
+}
+
+function saveNotes() {
+  clearTimeout(notesTimer);
+  notesWrites = notesWrites.catch(() => {}).then(async () => {
+    let failure;
+    for (const [id, notes] of pendingNotes) {
+      try {
+        const m = await api(`/api/meetings/${id}`, json('PATCH', { notes }));
+        if (pendingNotes.get(id) === notes) pendingNotes.delete(id);
+        if (current?.id === id) {
+          current = { ...m, notes: pendingNotes.get(id) ?? m.notes };
+          if ($('#notes-status')) $('#notes-status').textContent = pendingNotes.has(id) ? '尚未儲存' : '已儲存';
+        }
+      } catch (e) {
+        if (current?.id === id && $('#notes-status')) $('#notes-status').textContent = `儲存失敗：${e.message}，請按儲存重試`;
+        if (current?.id === id) failure ??= e;
+      }
+    }
+    if (failure) throw failure;
+  });
+  return notesWrites;
+}
+
+function notesEditor(m, canEdit) {
+  return `<div class="notes-tools"><span class="muted">Markdown 筆記</span><span class="spacer"></span>
+    ${canEdit ? `<button data-keep onclick="notesPreview = !notesPreview; render(current)">${notesPreview ? '編輯' : '預覽'}</button>` : ''}
+    ${canEdit ? '<button onclick="saveNotes().catch(e => alert(e.message))">儲存筆記</button>' : ''}</div>
+    ${notesPreview || !canEdit ? `<div class="markdown">${markdown(m.notes) || '<p class="muted">尚無筆記</p>'}</div>`
+      : `<textarea id="notes" class="notes" placeholder="# 會議筆記\n\n可以先記下議程、問題或重點，再加入錄音與影片。" aria-label="我的筆記" oninput="editNotes(this.value)" onchange="saveNotes().catch(() => {})">${esc(m.notes)}</textarea>`}
+    <p id="notes-status" class="muted" role="status">${pendingNotes.has(m.id) ? '尚未儲存' : '已儲存'}</p>`;
+}
 async function showNew() {
   stop();
-  await refreshList();
   if (me.role === 'readonly') return page('<p class="muted">唯讀帳號不能建立會議。</p>');
-  page(`<div class="crumb"><a href="#">會議紀錄</a> / 新會議</div>
-    <div class="icon">🎙️</div><h1><input id="title" placeholder="無標題會議" aria-label="會議標題"></h1>
-    <div class="props">
-      ${prop('🕐', '時間', `<input type="datetime-local" id="when" aria-label="會議時間" value="${localInput(new Date())}">`)}
-      ${prop('📍', '地點', `<input id="location" aria-label="地點" placeholder="會議室或線上連結">`)}
-      ${prop('📝', '摘要', `<input id="brief" aria-label="摘要" placeholder="一句話說明這場會議">`)}
-      ${prop('🏷', '標籤', `<input id="tags" aria-label="標籤" placeholder="用逗號分隔，或點下方既有標籤">
-        <div>${allTags().map((t, i) => `<button class="tag ${tagColor(t)}" onclick="addNewTag(${i})" title="加入標籤">＋ ${esc(t)}</button>`).join('')}</div>`)}
-      ${prop('🤖', 'Agent', `<select id="agent" aria-label="Agent">${aiCfg.agents.filter(a => a.enabled !== false).map(a => `<option value="${a.id}" title="${esc(a.description)}">${esc(a.name)}</option>`).join('')}</select>`)}
-      ${prop('🌐', '轉錄語言', `<select id="lang" aria-label="轉錄語言">${LANGS.map(([v, t]) => `<option value="${v}">${t}</option>`).join('')}</select>`)}
-      ${prop('📖', '術語', `<textarea id="glossary" rows="2" aria-label="術語" placeholder="這場會議會出現的專有名詞，用逗號或換行分隔，例如 Karpenter, IRSA, PgBouncer, 二代健保"></textarea>`)}
-    </div>
-    <div class="ai-block">
-      <div class="ai-head">🎙️ AI 會議筆記</div>
-      <div class="ai-start">
-        <button id="recBtn" class="primary" onclick="toggleRec()">● 開始轉錄</button>
-        <span id="recTime" class="muted"></span><span class="spacer"></span>
-        <button onclick="$('#file').click()">⤒ 上傳音訊或影片</button>
-        <input type="file" id="file" hidden accept="audio/*,video/*,.mp4,.m4a,.mp3,.wav,.webm,.mov,.aac,.ogg,.flac" onchange="uploadFile()">
-      </div>
-      <label class="muted"><input type="checkbox" id="capOn" ${localStorage.getItem('captions') === '1' ? 'checked' : ''} onchange="localStorage.setItem('captions', this.checked ? '1' : '0')">
-        即時字幕預覽：只用瀏覽器的本機語音辨識；瀏覽器不能在本機辨識時就不顯示，音訊不會送到雲端</label>
-      <div id="live" aria-live="polite"><i>即時字幕預設關閉。停止錄音後，會產生含講者標籤的正式逐字稿與摘要。</i></div>
-      <p id="msg" class="muted"></p>
-    </div>`);
-  if (!window.MediaRecorder) $('#recBtn').disabled = true;
+  const m = await api('/api/meetings', json('POST', { title: '無標題會議', lang: 'zh-TW', scheduledAt: localInput(new Date()), agentId: 'general' }));
+  location.hash = `${m.id}:notes`;
 }
 
-async function upload(blob, filename) {
-  $('#msg').textContent = '上傳中…';
-  const q = new URLSearchParams({ filename, lang: $('#lang').value, title: $('#title').value || filename, glossary: $('#glossary').value,
-    scheduledAt: $('#when').value, location: $('#location').value, brief: $('#brief').value, tags: canonList($('#tags').value, allTags()), agentId: $('#agent').value });
+let uploading = false, selectedSection = null, notesPreview = false;
+async function uploadFiles(files) {
+  if (!files.length || uploading) return;
+  const id = current.id;
+  const viewingUpload = () => current?.id === id && location.hash.slice(1).split(':')[0] === id;
+  uploading = true;
+  clearTimeout(pollTimer);
+  render(current);
   try {
-    const m = await api(`/api/meetings?${q}`, { method: 'POST', headers: { 'Content-Type': blob.type || 'application/octet-stream' }, body: blob });
-    location.hash = m.id;
+    await saveNotes();
+    for (const [i, file] of Array.from(files).entries()) {
+      if (viewingUpload()) $('#msg').textContent = `上傳 ${i + 1}/${files.length}：${file.name}`;
+      const q = new URLSearchParams({ filename: file.name, title: file.name });
+      const m = await api(`/api/meetings/${id}/sections?${q}`, { method: 'POST', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file });
+      if (viewingUpload()) current = { ...m, notes: pendingNotes.get(id) ?? m.notes };
+    }
   } catch (e) {
-    $('#msg').innerHTML = `<span class="err">上傳失敗：${esc(e.message)}</span>`;
+    alert(`上傳失敗：${e.message}。已成功上傳的 section 仍然保留。`);
+  } finally {
+    uploading = false;
+    if (current && location.hash.slice(1).split(':')[0] === current.id) render(current);
+    refreshList();
   }
 }
 
-function uploadFile() {
-  const f = $('#file').files[0];
-  if (f) upload(f, f.name);
+async function upload(blob, filename) {
+  await uploadFiles([new File([blob], filename, { type: blob.type })]);
+}
+
+function uploadFile() { uploadFiles(Array.from($('#file').files)); }
+
+async function changeSection(id, title, delta = 0) {
+  const sections = current.sections.map(s => ({ id: s.id, title: s.id === id && title !== null ? title : s.title }));
+  const i = sections.findIndex(s => s.id === id), j = i + delta;
+  if (j < 0 || j >= sections.length) return;
+  [sections[i], sections[j]] = [sections[j], sections[i]];
+  try { await patch({ sections }); render(current); }
+  catch (e) { alert(e.message); render(current); }
+}
+
+function playSection(id) {
+  if (selectedSection !== id) $('#audio')?.pause();
+  selectedSection = id;
+  activeSeg = 0;
+  render(current);
 }
 
 // ---- 錄音 + 即時字幕 ----
@@ -788,16 +888,16 @@ async function toggleRec() {
   rec.onstop = () => {
     stream.getTracks().forEach(t => t.stop());
     recog?.stop(); recog = null; clearInterval(tick);
-    $('#recBtn').textContent = '● 開始轉錄'; $('#recBtn').classList.replace('rec', 'primary');
+    $('#recBtn').textContent = '開始錄音'; $('#recBtn').classList.replace('rec', 'primary');
     const type = rec.mimeType || 'audio/webm';
     const ext = type.includes('mp4') ? 'm4a' : type.includes('ogg') ? 'ogg' : 'webm';
-    upload(new Blob(chunks, { type }), `recording-${new Date().toISOString().replace(/[:.]/g, '-')}.${ext}`);
+    upload(new Blob(chunks, { type }), `recording-${localInput(new Date()).replace(/[:]/g, '-')}.${ext}`);
   };
   // shortcut: chunks live only in memory until stop; a tab crash loses the recording. Upload chunks incrementally if meetings run long.
   rec.start(1000);
   recStart = Date.now();
-  tick = setInterval(() => $('#recTime').textContent = fmt((Date.now() - recStart) / 1000), 500);
-  $('#recBtn').textContent = '■ 停止並產生筆記'; $('#recBtn').classList.replace('primary', 'rec');
+  tick = setInterval(() => { if ($('#recTime')) $('#recTime').textContent = fmt((Date.now() - recStart) / 1000); }, 500);
+  render(current);
   startCaptions();
 }
 
@@ -806,7 +906,7 @@ async function toggleRec() {
 async function startCaptions() {
   if (!$('#capOn')?.checked) return;
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  const lang = $('#lang').value === 'auto' ? navigator.language : $('#lang').value;
+  const lang = current.lang === 'auto' ? navigator.language : current.lang;
   const opts = { langs: [lang], processLocally: true };
   let status = 'unavailable';
   try { if (SR?.available) status = await SR.available(opts); } catch {}
@@ -859,7 +959,10 @@ function renderSummary(m) {
 function seek(n) {
   const s = current?.segments[n - 1];
   if (!s) return false;
-  $('#audio').currentTime = s.start;
+  if (selectedSection !== (s.sectionId ?? 'legacy')) playSection(s.sectionId ?? 'legacy');
+  const audio = $('#audio');
+  const jump = () => { audio.currentTime = s.start; };
+  if (audio.readyState) jump(); else audio.addEventListener('loadedmetadata', jump, { once: true });
   if (tab !== 'transcript') { tab = 'transcript'; render(current); }
   document.querySelectorAll('.seg.hl').forEach(el => el.classList.remove('hl'));
   const el = document.getElementById(`seg-${n}`);
@@ -872,11 +975,11 @@ function setTab(t) { tab = t; render(current); }
 async function openMeeting(id) {
   clearTimeout(pollTimer);
   const same = current?.id === id;
-  if (!same) { tab = 'summary'; showRaw = false; activeSeg = 0; }
+  if (!same) { tab = 'summary'; showRaw = false; activeSeg = 0; selectedSection = null; notesPreview = false; }
   const m = await api(`/api/meetings/${id}`);
-  current = m;
+  current = { ...m, notes: pendingNotes.get(id) ?? m.notes };
   // Polling must not wipe text the user is typing (title, notes, glossary).
-  if (!same || !document.activeElement?.matches('main textarea, main input:not([type=checkbox])')) render(m);
+  if (!same || !document.activeElement?.matches('main textarea, main input:not([type=checkbox])')) render(current);
   refreshList();
   if (BUSY.includes(m.status)) pollTimer = setTimeout(() => openMeeting(id), 2000);
 }
@@ -884,18 +987,20 @@ async function openMeeting(id) {
 function render(m) {
   pick = null; // a re-render drops the range picker
   const busy = BUSY.includes(m.status);
+  const keepLive = rec?.state === 'recording' && $('#live');
+  m.sections ??= m.file ? [{ id: 'legacy', title: m.originalName, originalName: m.originalName }] : [];
+  if (!m.sections.some(s => s.id === selectedSection)) selectedSection = m.sections[0]?.id ?? null;
   // Keep the same <audio> element across re-renders so playback isn't interrupted.
-  const keepAudio = $('#audio')?.dataset.id === m.id && $('#audio');
+  const keepAudio = $('#audio')?.dataset.id === m.id && $('#audio')?.dataset.section === selectedSection && $('#audio');
   const speakerIds = [...new Set(m.segments.map(s => s.speaker))].sort((a, b) => a - b);
-  const langLabel = (LANGS.find(([v]) => v === m.lang) ?? [, m.lang])[1];
   const canEdit = rank(m.perm) >= rank('edit');
-  const staleNote = m.summaryStale && !busy ? `<p class="notice">講者或參與者改過了，摘要與 Action Items 還是舊的名字。
+  const staleNote = m.summaryStale && !busy ? `<p class="notice">筆記、講者或 section 已變更，摘要與待辦事項尚未更新。
     ${canEdit ? '<button onclick="resummarize()">↻ 重新產生摘要</button>' : ''}</p>` : '';
   const spkOpts = (cur, extra = '') => speakerIds.filter(x => x !== cur).map(x => `<option value="${x}">${esc(spk(m, x))}</option>`).join('') + extra;
   const bodies = {
     summary: busy && !m.summary ? `<p class="muted">⏳ ${STATUS[m.status][0]}…</p>`
       : `${staleNote}<div class="summary">${renderSummary(m) || '<p class="muted">尚無摘要</p>'}</div>`,
-    notes: `<textarea class="notes" placeholder="在這裡記筆記…重新產生摘要時會一併參考" aria-label="我的筆記" onchange="patch({ notes: this.value })">${esc(m.notes)}</textarea>`,
+    notes: notesEditor(m, canEdit),
     transcript: !m.segments.length ? `<p class="muted">${busy ? `⏳ ${STATUS[m.status][0]}…` : '沒有逐字稿'}</p>` : `
       <div class="speakers">${speakerIds.map(s => `<label style="color:${COLORS[s % COLORS.length]}">${esc(`Speaker ${s < 26 ? String.fromCharCode(65 + s) : s + 1}`)}
         <input type="text" list="dl-people" value="${esc(m.speakers[s] ?? '')}" placeholder="輸入姓名" onchange="renameSpeaker(${s}, this.value)">${speakerIds.length > 1
@@ -905,10 +1010,12 @@ function render(m) {
       ${canEdit ? `<div class="learn-row"><input aria-label="加入團隊術語" placeholder="＋ 加入團隊術語（例如聽錯的專有名詞），下次轉錄起生效" onchange="addTeamTerm(this)"><span id="term-msg" class="muted"></span></div>` : ''}
       ${m.perm === 'owner' ? `<div class="learn-row">${m.benchmarkAt
         ? `📌 已凍結為 benchmark（${dt(m.benchmarkAt)}）<button class="ghost" onclick="setBenchmark(false)">取消凍結</button>`
-        : '<button class="ghost" onclick="setBenchmark(true)" title="講者與文字校正完成後凍結，當作準確率的標準答案">📌 凍結為 benchmark</button>'}</div>` : ''}
+        : `<button class="ghost" onclick="setBenchmark(true)" ${m.sections.length > 1 ? 'disabled' : ''} title="${m.sections.length > 1 ? '目前 benchmark 只支援單一 section' : '講者與文字校正完成後凍結，當作準確率的標準答案'}">📌 凍結為 benchmark</button>`}</div>` : ''}
       <label class="muted"><input type="checkbox" data-keep ${tidyView ? 'checked' : ''} onchange="tidyView = this.checked; localStorage.setItem('tidy', tidyView ? '1' : '0'); render(current)"> 精簡顯示（隱藏呃、嗯、欸等語助詞，不改逐字稿）</label>
       ${m.segments.some(s => s.raw && s.raw !== s.text) ? `<label class="muted"><input type="checkbox" data-keep ${showRaw ? 'checked' : ''} onchange="showRaw = this.checked; render(current)"> 顯示原始辨識結果（未轉繁體、未校對）</label>` : ''}
-      ${m.segments.map((s, i) => { const text = showRaw ? s.raw ?? s.text : tidyView ? tidy(s.text) : s.text; return `<div class="seg${text ? '' : ' filler'}" id="seg-${i + 1}"><time onclick="seek(${i + 1})">${fmt(s.start)}</time>
+      ${m.segments.map((s, i) => { const text = showRaw ? s.raw ?? s.text : tidyView ? tidy(s.text) : s.text;
+        const boundary = i === 0 || s.sectionId !== m.segments[i - 1].sectionId;
+        return `${boundary ? `<h3 class="section-heading">${esc(m.sections.find(x => x.id === s.sectionId)?.title ?? m.originalName)}</h3>` : ''}<div class="seg${text ? '' : ' filler'}" id="seg-${i + 1}"><time onclick="seek(${i + 1})">${fmt(s.start)}</time>
         <b style="color:${COLORS[s.speaker % COLORS.length]}" ${canEdit ? `class="pick" title="點一下改講者；Shift＋點另一段選範圍" onclick="pickSpeaker(${i}, event)"` : ''}>${esc(spk(m, s.speaker))}</b><span>${esc(text).replaceAll('【?】', '<mark title="辨識不確定，請對照錄音">【?】</mark>')}</span></div>`; }).join('')}`,
   };
   page(`<div class="crumb"><a href="#">會議紀錄</a> / ${esc(m.title)}</div>
@@ -929,10 +1036,10 @@ function render(m) {
         + (m.participants.includes(p.name) ? `<button class="tag-x" aria-label="移除參與者 ${esc(p.name)}" onclick="setParticipants(current.participants.filter((_, k) => k !== ${m.participants.indexOf(p.name)}))">×</button>` : '')).join('')
         + `<input class="tag-add" list="dl-people" aria-label="新增參與者" placeholder="＋ 新增參與者" onchange="setParticipants([...current.participants, canon(this.value, directory.people.map(p => p.name))])">`)}
       ${prop('🏢', '團隊', [...m.teams.map(teamLink), ...uniq(m.people.map(p => p.leader)).map(leaderLink)].join('') || '<span class="muted">講者改成名錄裡的名字後會自動帶出</span>')}
-      ${prop('🌐', '語言', esc(langLabel) + (m.language ? ` <span class="muted">· 偵測為 ${esc(m.language)}</span>` : ''))}
+      ${prop('🌐', '轉錄語言', `<select id="lang" aria-label="轉錄語言" onchange="patch({ lang: this.value }).catch(e => alert(e.message))" ${busy || uploading ? 'disabled' : ''}>${LANGS.map(([v, t]) => `<option value="${v}" ${m.lang === v ? 'selected' : ''}>${t}</option>`).join('')}</select>` + (m.language ? ` <span class="muted">偵測為 ${esc(m.language)}</span>` : ''))}
       ${prop('📖', '術語', `<textarea rows="1" aria-label="術語" placeholder="空白" onchange="patch({ glossary: this.value })">${esc(m.glossary)}</textarea>`
         + (teamTerms.length ? `<span class="muted" title="${esc(teamTerms.join('、'))}">另有 ${teamTerms.length} 個團隊術語；轉錄最多送 200 個，以這場會議的術語優先，校對清單不受此限制。</span>` : ''))}
-      ${prop('📎', '錄音', `<a href="/api/meetings/${m.id}/audio?download" download>${esc(m.originalName)}</a>`)}
+      ${prop('📎', '媒體', m.sections.length ? `${m.sections.length} 個 section` : '<span class="muted">尚未加入，可先寫筆記</span>')}
       ${prop('📊', 'AI 用量', (m.usage ?? []).length ? `${usageLine(totalOf(m.usage))}<details><summary class="muted">每次呼叫明細</summary>${usageRows([...m.usage].reverse())}</details>` : '<span class="muted">尚無紀錄</span>')}
       ${prop('🔒', '權限', m.perm === 'owner'
         ? `<select aria-label="其他人的權限" data-keep onchange="patch({ access: this.value })">${ACCESS.map(([v, t]) => `<option value="${v}" ${m.access === v ? 'selected' : ''}>${t}</option>`).join('')}</select>
@@ -941,27 +1048,47 @@ function render(m) {
     </div>
     <div class="ai-block">
       <div class="ai-head">🎙️ AI 會議筆記<span class="muted">${day(m.createdAt)}</span><span class="spacer"></span>
-        <button class="ghost" onclick="resummarize(true)" ${busy ? 'disabled' : ''} title="用目前的術語重新轉錄，講者姓名會保留">↻ 重新轉錄</button></div>
+        ${m.sections.length ? `<button class="ghost" onclick="resummarize(true)" ${busy || uploading || rec?.state === 'recording' ? 'disabled' : ''} title="用目前術語重新轉錄所有 section">↻ 重新轉錄</button>` : ''}</div>
+      ${m.sections.length ? '' : bodies.notes}
+      <div class="ai-start">
+        ${canEdit ? `<button id="recBtn" class="${rec?.state === 'recording' ? 'rec' : 'primary'}" onclick="toggleRec()" ${busy || uploading || !window.MediaRecorder ? 'disabled' : ''}>${rec?.state === 'recording' ? '■ 停止錄音並加入 section' : '開始錄音'}</button>
+        <span id="recTime" class="muted"></span><span class="spacer"></span>
+        <button onclick="$('#file').click()" ${busy || uploading || rec?.state === 'recording' ? 'disabled' : ''}>上傳音訊或影片</button>
+        <input type="file" id="file" hidden multiple accept="audio/*,video/*,.mp4,.m4a,.mp3,.wav,.webm,.mov,.aac,.ogg,.flac" onchange="uploadFile()">
+        <button onclick="resummarize()" ${busy || uploading || rec?.state === 'recording' || !m.sections.length ? 'disabled' : ''}>產生會議筆記</button>` : ''}
+      </div>
+      ${canEdit ? `<label class="muted"><input type="checkbox" id="capOn" ${localStorage.getItem('captions') === '1' ? 'checked' : ''} onchange="localStorage.setItem('captions', this.checked ? '1' : '0')"> 即時字幕預覽（只用瀏覽器本機辨識）</label>
+      <div id="live" aria-live="polite" ${rec?.state === 'recording' ? '' : 'hidden'}></div>` : ''}
+      <p id="msg" class="muted" role="status">${uploading ? '上傳中…' : '可一次加入多個檔案，依加入順序排列；可命名與調整順序，再產生整體摘要。'}</p>
+      <div class="sections" aria-label="媒體 sections">${m.sections.map((s, i) => `<section class="media-section">
+        <div class="section-row"><span class="muted">Section ${i + 1}</span>
+          <input aria-label="Section ${i + 1} 名稱" value="${esc(s.title)}" maxlength="200" onchange="changeSection('${s.id}', this.value)" ${busy || uploading || !canEdit ? 'disabled' : ''}>
+          ${canEdit ? `<button aria-label="上移 Section ${i + 1}" onclick="changeSection('${s.id}', null, -1)" ${busy || uploading || i === 0 ? 'disabled' : ''}>↑</button>
+          <button aria-label="下移 Section ${i + 1}" onclick="changeSection('${s.id}', null, 1)" ${busy || uploading || i === m.sections.length - 1 ? 'disabled' : ''}>↓</button>` : ''}</div>
+        <div class="section-row"><button data-keep aria-pressed="${selectedSection === s.id}" onclick="playSection('${s.id}')">${selectedSection === s.id ? '目前播放' : '播放'}</button>
+          <a href="/api/meetings/${m.id}/audio?section=${s.id}&download" download>${esc(s.originalName)}</a>
+          <span class="muted">${s.transcribed ? '已轉錄' : '待轉錄'}</span></div>
+      </section>`).join('')}</div>
       <div id="audioSlot"></div>
-      <div class="player">
+      <div class="player" ${m.sections.length ? '' : 'hidden'}>
         <button onclick="skip(-10)" aria-label="倒退 10 秒">↺ 10 秒</button>
         <button onclick="skip(10)" aria-label="快轉 10 秒">10 秒 ↻</button>
         <span class="spacer"></span><span class="muted">速度</span>
         ${[1, 1.2, 1.5, 2].map(r => `<button class="rate ${rate === r ? 'on' : ''}" data-r="${r}" aria-pressed="${rate === r}" onclick="setRate(${r})">${r}×</button>`).join('')}
       </div>
-      <div class="tabs" role="tablist">${[['summary', '摘要'], ['notes', '筆記'], ['transcript', '逐字稿']].map(([k, t]) =>
-        `<button class="tab ${tab === k ? 'on' : ''}" role="tab" aria-selected="${tab === k}" onclick="setTab('${k}')">${t}</button>`).join('')}</div>
-      ${tab === 'summary' ? `<div class="ai-foot">
+      ${m.sections.length ? `<div class="tabs" role="tablist">${[['summary', '摘要'], ['notes', '筆記'], ['transcript', '逐字稿']].map(([k, t]) =>
+        `<button class="tab ${tab === k ? 'on' : ''}" role="tab" aria-selected="${tab === k}" onclick="setTab('${k}')">${t}</button>`).join('')}</div>` : ''}
+      ${m.sections.length && tab === 'summary' ? `<div class="ai-foot">
         <label class="muted">指示 <select id="tpl">${Object.entries(TYPES).map(([v, [t]]) => `<option value="${v}" ${m.template === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
         <label class="muted">語言 <select id="outLang">${[['', '與逐字稿相同'], ['繁體中文（台灣）', '繁體中文'], ['English', 'English'], ['日本語', '日本語'], ['简体中文', '简体中文'], ['한국어', '한국어']]
           .map(([v, t]) => `<option value="${esc(v)}" ${m.outputLang === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
         <span class="spacer"></span>
-        <button onclick="resummarize()" ${busy ? 'disabled' : ''}>${m.segments.length ? '↻ 重新產生摘要' : '↻ 重新轉錄並摘要'}</button>
+        <button onclick="resummarize()" ${busy || uploading || rec?.state === 'recording' || !m.sections.length ? 'disabled' : ''}>${m.segments.length ? '↻ 重新產生摘要' : '轉錄並產生摘要'}</button>
         ${m.summaryBy ? `<span class="muted" style="width:100%">由 ${esc(m.summaryBy.agent)} · ${esc(m.summaryBy.model)}（effort ${esc(m.summaryBy.effort)}）產生</span>` : ''}
         <details ${m.instructions ? 'open' : ''}><summary class="muted">自訂指示</summary>
           <textarea id="instr" placeholder="例如：列出所有提到的數字與截止日">${esc(m.instructions)}</textarea></details>
       </div>` : ''}
-      ${bodies[tab]}
+      ${m.sections.length ? bodies[tab] : ''}
     </div>
     <h2 class="h2">✅ Action Items</h2>
     ${staleNote}${m.actions.map((a, i) => todo(m, a, i, esc(a.text), tag([a.owner || '未指定', 'purple']) + (a.team ? teamLink(a.team) : '') + (a.cite ? cites(`[${a.cite}]`) : ''))).join('')
@@ -975,17 +1102,20 @@ function render(m) {
     ${rank(m.perm) >= rank('comment') ? `<textarea id="cmt" data-keep aria-label="留言" placeholder="留言…"></textarea>
       <div class="row"><button data-keep onclick="addComment()">送出留言</button>
       <label class="muted"><input type="checkbox" id="cmtseg" data-keep> 附上目前播放到的逐字稿段落</label></div>` : ''}`);
+  if (keepLive && $('#live')) $('#live').replaceWith(keepLive);
   // Below edit permission, lock every editing control; viewing, playback and (if allowed) commenting stay usable.
   if (rank(m.perm) < rank('edit')) {
     document.querySelectorAll('main input, main textarea, main select').forEach(el => { if (!el.matches('[data-keep]')) el.disabled = true; });
     document.querySelectorAll('main .tag-x, main .tag-add, .ai-head .ghost, .ai-foot button, .speakers select').forEach(el => { el.hidden = true; });
   }
-  const audio = keepAudio || Object.assign(document.createElement('audio'), { id: 'audio', controls: true, preload: 'metadata', src: `/api/meetings/${m.id}/audio` });
+  if (!m.sections.length) return;
+  const audio = keepAudio || Object.assign(document.createElement('audio'), { id: 'audio', controls: true, preload: 'metadata', src: `/api/meetings/${m.id}/audio?section=${selectedSection}` });
   if (!keepAudio) {
     audio.defaultPlaybackRate = audio.playbackRate = rate; // defaultPlaybackRate survives the media load reset
     audio.addEventListener('timeupdate', syncTranscript);
   }
   audio.dataset.id = m.id;
+  audio.dataset.section = selectedSection;
   $('#audioSlot').append(audio);
   syncTranscript();
 }
@@ -1007,7 +1137,9 @@ function syncTranscript() {
   const a = $('#audio'), segs = current?.segments ?? [];
   if (!a || (a.paused && !a.currentTime)) return;
   let i = 0;
-  while (i < segs.length && segs[i].start <= a.currentTime) i++;
+  for (let k = 0; k < segs.length; k++) {
+    if ((segs[k].sectionId ?? 'legacy') === selectedSection && segs[k].start <= a.currentTime) i = k + 1;
+  }
   const el = i ? document.getElementById(`seg-${i}`) : null, prev = document.querySelector('.seg.active');
   if (el === prev) return;
   prev?.classList.remove('active');
@@ -1044,7 +1176,9 @@ async function createShare(perm) {
 }
 
 async function patch(body) {
-  current = await api(`/api/meetings/${current.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const id = current.id;
+  const m = await api(`/api/meetings/${id}`, json('PATCH', body));
+  if (current?.id === id) current = { ...m, notes: pendingNotes.get(id) ?? m.notes };
   refreshList();
 }
 
@@ -1133,7 +1267,9 @@ async function mergeSpeaker(from, to) {
 }
 
 async function resummarize(retranscribe = false) {
+  if (rec?.state === 'recording' || uploading) return alert('請先完成錄音或上傳，再產生會議筆記。');
   try {
+    await saveNotes();
     await api(`/api/meetings/${current.id}/summarize`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ template: $('#tpl')?.value ?? current.template, outputLang: $('#outLang')?.value ?? current.outputLang, agentId: current.agentId,
@@ -1185,6 +1321,12 @@ async function runSearch(q) {
 }
 
 async function route() {
+  try { await saveNotes(); } catch (e) { alert(`筆記儲存失敗：${e.message}。內容仍暫存在此分頁，關閉前請回到原會議重試儲存。`); }
+  if (rec?.state === 'recording' && location.hash.split(':')[0] !== `#${current?.id}`) {
+    location.hash = `${current.id}:notes`;
+    alert('請先停止錄音，音訊會加入目前會議。');
+    return;
+  }
   if (!me) return showLogin();
   const h = location.hash.slice(1);
   if (h.startsWith('share/')) { // opening a share link grants its permission, then shows the meeting
@@ -1203,6 +1345,9 @@ async function route() {
   Promise.resolve(go).catch(e => page(`<p class="err">${esc(e.message)}</p>`));
 }
 window.addEventListener('hashchange', route);
+window.addEventListener('beforeunload', e => {
+  if (pendingNotes.size || rec?.state === 'recording' || uploading) { e.preventDefault(); e.returnValue = ''; }
+});
 // ---- 側欄：拖曳調整寬度、收合（⌘\），狀態存在 localStorage ----
 function setSideWidth(w) {
   w = Math.round(Math.max(180, Math.min(480, w)));

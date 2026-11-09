@@ -325,6 +325,9 @@ test('accounts, roles, meeting access, comments, share links, password reset, pr
   const commented = await (await member(`${mtg}/comments`, json('POST', { text: '請補 IRSA 細節', seg: 2 }))).json();
   assert.deepEqual(commented.comments.map(c => [c.name, c.text, c.seg]), [['小美', '請補 IRSA 細節', 2]]);
   assert.equal((await ro(`${mtg}/comments`, json('POST', { text: 'no' }))).status, 403, 'readonly never writes');
+  assert.equal((await ro(mtg, json('PATCH', { notes: '# blocked' }))).status, 403);
+  assert.equal((await ro(`${mtg}/sections?filename=blocked.wav`, { method: 'POST', body: 'blocked' })).status, 403);
+  assert.equal((await ro(mtg, json('PATCH', { sections: [] }))).status, 403);
   await admin(mtg, json('PATCH', { access: 'private' }));
   assert.equal((await member(mtg)).status, 404, 'private meetings are invisible');
   assert.deepEqual(await (await member(base)).json(), []);
@@ -625,5 +628,228 @@ test('transcription phrase limit: send at most 200, preserve correction terms an
   } finally {
     globalThis.fetch = originalFetch;
     process.env.OPENROUTER_API_KEY = originalKey;
+  }
+});
+const localMeetingFile = id => fs.globSync(path.join(process.env.DATA_DIR, '*', id, 'meeting.json'))[0];
+const localMeeting = id => JSON.parse(fs.readFileSync(localMeetingFile(id), 'utf8'));
+const saveLocalMeeting = (id, meeting) => fs.writeFileSync(localMeetingFile(id), JSON.stringify(meeting, null, 2));
+const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+const appendMedia = (id, filename, title, bytes) => admin(`${base}/${id}/sections?${new URLSearchParams({ filename, title })}`, {
+  method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: bytes,
+});
+async function waitMeeting(id, done) {
+  for (let i = 0; i < 150; i++) {
+    const meeting = await (await admin(`${base}/${id}`)).json();
+    if (done(meeting)) return meeting;
+    await pause(20);
+  }
+  throw new Error(`meeting ${id} did not reach the expected state: ${JSON.stringify(await localMeeting(id))}`);
+}
+function silentWav() {
+  const pcm = Buffer.alloc(16000 * 2), header = Buffer.alloc(44);
+  header.write('RIFF', 0); header.writeUInt32LE(36 + pcm.length, 4); header.write('WAVEfmt ', 8);
+  header.writeUInt32LE(16, 16); header.writeUInt16LE(1, 20); header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(16000, 24); header.writeUInt32LE(32000, 28); header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34); header.write('data', 36); header.writeUInt32LE(pcm.length, 40);
+  return Buffer.concat([header, pcm]);
+}
+
+test('notes-first JSON creates a validated draft with no media or automatic processing', async () => {
+  const malformed = await admin(base, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{' });
+  assert.equal(malformed.status, 400, 'malformed JSON is a client error');
+  assert.equal((await admin(base, json('POST', { title: 'bad language', lang: 'zh&x' }))).status, 400);
+  const createdResponse = await admin(base, json('POST', { title: 'Planning', notes: 'Notes first', lang: 'en', scheduledAt: '2026-11-10T09:30', tags: ['planning'] }));
+  assert.equal(createdResponse.status, 201);
+  const draft = await createdResponse.json();
+  assert.deepEqual([draft.status, draft.notes, draft.lang, draft.sections, draft.participants], ['draft', 'Notes first', 'en', [], []]);
+  assert.equal((await admin(`${base}/${draft.id}/audio`)).status, 404, 'drafts have no audio');
+  assert.equal((await admin(`${base}/${draft.id}/summarize`, json('POST', {}))).status, 400, 'summarize requires media');
+  const changed = await (await admin(`${base}/${draft.id}`, json('PATCH', { lang: 'zh-TW' }))).json();
+  assert.equal(changed.lang, 'zh-TW', 'draft language can be changed');
+  assert.equal((await admin(`${base}/${draft.id}`, json('PATCH', { lang: 'x&y' }))).status, 400);
+  assert.equal((await admin(`${base}/${draft.id}`)).status, 200, 'draft remains readable without running AI');
+});
+
+test('sections append safely under concurrency, enforce permissions and exact permutations, and remap citations', async () => {
+  const draft = await (await admin(base, json('POST', { title: 'Sections', lang: 'en' }))).json();
+  const media = [Buffer.from('first bytes'), Buffer.from('second bytes')];
+  const [left, right] = await Promise.all([
+    appendMedia(draft.id, '../unsafe.mp3', 'Unsafe file name', media[0]),
+    appendMedia(draft.id, 'C:\\private\\also.wav', 'Windows path', media[1]),
+  ]);
+  assert.deepEqual([left.status, right.status], [200, 200]);
+  const snapshots = await Promise.all([left.json(), right.json()]);
+  const [one, two] = [snapshots.find(m => m.sections.length === 1), snapshots.find(m => m.sections.length === 2)];
+  assert.ok(one && two, 'per-meeting queue returns serial append snapshots');
+  assert.equal(two.sections[0].id, one.sections[0].id);
+  assert.notEqual(two.sections[1].id, one.sections[0].id);
+  assert.deepEqual(two.sections.map(s => s.originalName).sort(), ['also.wav', 'unsafe.mp3']);
+  for (const section of two.sections) {
+    assert.match(section.file, /^recording-[0-9a-f-]{36}\.(mp3|wav)$/);
+    assert.equal(path.basename(section.file), section.file);
+    const expected = section.originalName === 'unsafe.mp3' ? media[0] : media[1];
+    assert.deepEqual(fs.readFileSync(path.join(path.dirname(localMeetingFile(draft.id)), section.file)), expected);
+  }
+  assert.equal(fs.existsSync(path.join(process.env.DATA_DIR, 'unsafe.mp3')), false, 'filename traversal cannot write outside the meeting folder');
+  assert.deepEqual(Buffer.from(await (await admin(`${base}/${draft.id}/audio`)).arrayBuffer()), media[two.sections[0].originalName === 'unsafe.mp3' ? 0 : 1]);
+  assert.equal((await admin(`${base}/${draft.id}/audio?section=unknown`)).status, 404);
+
+  const member = client();
+  assert.equal((await member(`${api}/auth/login`, json('POST', { username: 'mei', password: 'password2' }))).status, 200);
+  assert.equal((await member(`${base}/${draft.id}/sections?filename=blocked.wav`, { method: 'POST', body: 'blocked' })).status, 403);
+  assert.equal((await member(`${base}/${draft.id}`, json('PATCH', { sections: two.sections.map(({ id, title }) => ({ id, title })) }))).status, 403);
+
+  for (const sections of [
+    [{ id: two.sections[0].id, title: 'Only one' }],
+    [{ id: two.sections[0].id, title: 'Duplicate' }, { id: two.sections[0].id, title: 'Duplicate again' }],
+    [{ id: two.sections[0].id, title: '' }, { id: two.sections[1].id, title: 'Good' }],
+    [{ id: two.sections[0].id, title: 'x'.repeat(201) }, { id: two.sections[1].id, title: 'Good' }],
+    [{ id: two.sections[0].id, title: 'Good', file: '../../outside' }, { id: two.sections[1].id, title: 'Good' }],
+  ]) assert.equal((await admin(`${base}/${draft.id}`, json('PATCH', { sections }))).status, 400);
+
+  const file = localMeetingFile(draft.id), fixture = localMeeting(draft.id);
+  fixture.status = 'done';
+  fixture.sections = fixture.sections.map(s => ({ ...s, transcribed: true }));
+  fixture.segments = fixture.sections.map((s, i) => ({ sectionId: s.id, start: 0, end: 1, speaker: i, text: `section ${i + 1}`, raw: `section ${i + 1}` }));
+  fixture.speakers = { 0: 'A', 1: 'B' };
+  fixture.summary = 'See [1,2] and [1-2]';
+  fixture.actions = [{ text: 'Follow up', owner: 'Boss', done: false, cite: 1 }];
+  fixture.comments = [{ id: 'comment-1', userId: 'user-1', name: 'Boss', text: 'comment', seg: 2, createdAt: nowIso() }];
+  fixture.speakerHints = [{ speaker: 0, name: 'Candidate', evidence: [1, 2], reason: 'cue' }];
+  fixture.summaryStale = false;
+  saveLocalMeeting(draft.id, fixture);
+
+  const reordered = await (await admin(`${base}/${draft.id}`, json('PATCH', { sections: [
+    { id: two.sections[1].id, title: 'Second renamed' }, { id: two.sections[0].id, title: 'First renamed' },
+  ] }))).json();
+  assert.deepEqual(reordered.sections.map(s => s.id), [two.sections[1].id, two.sections[0].id]);
+  assert.deepEqual(reordered.segments.map(s => s.sectionId), [two.sections[1].id, two.sections[0].id]);
+  assert.match(reordered.summary, /\[2、1\].*\[2、1\]/);
+  assert.deepEqual([reordered.actions[0].cite, reordered.comments[0].seg, reordered.speakerHints[0].evidence], [2, 1, [2, 1]]);
+  assert.equal(reordered.summaryStale, true);
+
+  // A staged upload can finish after processing has been reserved; the queued publish check must reject and clean it up.
+  const folder = path.dirname(file);
+  let controller, closed = false;
+  const body = new ReadableStream({ start(c) { controller = c; c.enqueue(Buffer.from('initial bytes')); } });
+  const upload = admin(`${base}/${draft.id}/sections?filename=late.wav&title=Late`, { method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body, duplex: 'half' });
+  let staged = false;
+  for (let i = 0; i < 100; i++) {
+    if (fs.readdirSync(folder).some(name => /^\.upload-[0-9a-f-]+\.tmp$/.test(name))) { staged = true; break; }
+    await pause(10);
+  }
+  try {
+    assert.ok(staged, 'upload reached its temporary file before the status changed');
+    const busy = localMeeting(draft.id); busy.status = 'summarizing'; saveLocalMeeting(draft.id, busy);
+    controller.enqueue(Buffer.from('late bytes')); controller.close(); closed = true;
+    const refused = await upload;
+    assert.equal(refused.status, 409);
+    await refused.text();
+    assert.equal(localMeeting(draft.id).sections.length, two.sections.length, 'busy upload was never published');
+    assert.equal(fs.readdirSync(folder).some(name => name.startsWith('.upload-')), false, 'staging file was removed');
+    const restored = localMeeting(draft.id); restored.status = 'done'; saveLocalMeeting(draft.id, restored);
+  } finally {
+    if (!closed) { controller.close(); await upload.catch(() => {}); }
+  }
+});
+
+test('pending sections transcribe through transcribeClean in order, isolate speakers, remap citations, and reuse cached transcripts', async () => {
+  const draft = await (await admin(base, json('POST', { title: 'Multi section', lang: 'en', notes: 'Please summarize Existing A before Pending B.' }))).json();
+  const cached = await (await appendMedia(draft.id, 'existing.wav', 'Existing A', Buffer.from('cached audio'))).json();
+  const existingId = cached.sections[0].id;
+  const fixture = localMeeting(draft.id);
+  fixture.status = 'done';
+  fixture.sections[0].transcribed = true;
+  fixture.segments = [{ sectionId: existingId, start: 12, end: 13, speaker: 0, text: 'cached transcript', raw: 'cached transcript' }];
+  fixture.speakers = { 0: 'Existing speaker' };
+  fixture.summary = 'Cached point [1]';
+  fixture.actions = [{ text: 'Keep reference', owner: 'Boss', done: false, cite: 1 }];
+  fixture.comments = [{ id: 'comment-pending', userId: 'user-1', name: 'Boss', text: 'on cached line', seg: 1, createdAt: nowIso() }];
+  fixture.speakerHints = [{ speaker: 0, name: 'Candidate', evidence: [1], reason: 'cue' }];
+  fixture.summaryStale = false;
+  saveLocalMeeting(draft.id, fixture);
+  const pending = await (await appendMedia(draft.id, 'pending.wav', 'Pending B', silentWav())).json();
+  const pendingId = pending.sections.find(s => s.id !== existingId).id;
+  assert.equal(pending.sections.find(s => s.id === pendingId).transcribed, false);
+  const order = await admin(`${base}/${draft.id}`, json('PATCH', { sections: [
+    { id: pendingId, title: 'Pending B' }, { id: existingId, title: 'Existing A' },
+  ] }));
+  assert.equal(order.status, 200);
+
+  const savedEnv = Object.fromEntries(['LLM_PROVIDER', 'OPENAI_BASE_URL', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY'].map(k => [k, process.env[k]]));
+  const originalFetch = globalThis.fetch;
+  let transcribeCalls = 0, summaryCalls = 0, holdSummary = true, capturedPrompt = '', releaseSummary;
+  let signalSummary;
+  const summaryStarted = new Promise(resolve => { signalSummary = resolve; });
+  const summaryText = '## 摘要\nPending B [1]，Existing A [2]\n## 重點\n- 兩段分開整理 [1] [2]\n## 決策\n- 無\n## 待辦事項\n- [ ] 後續 — Boss [2]';
+  const openaiReply = content => new Response(JSON.stringify({ choices: [{ message: { content }, finish_reason: 'stop' }], usage: { prompt_tokens: 12, completion_tokens: 8 } }),
+    { headers: { 'Content-Type': 'application/json' } });
+  process.env.LLM_PROVIDER = 'openai';
+  process.env.OPENAI_BASE_URL = 'http://section-test/v1';
+  process.env.OPENAI_API_KEY = 'fake-section-key';
+  process.env.OPENROUTER_API_KEY = 'fake-transcription-key';
+  globalThis.fetch = async (url, options) => {
+    const target = String(url);
+    if (target.startsWith('http://127.0.0.1:')) return originalFetch(url, options);
+    if (target === 'https://openrouter.ai/api/v1/audio/transcriptions') {
+      transcribeCalls++;
+      return new Response(JSON.stringify({ language: 'en', duration: 1, segments: [{ start: 0, end: 1, speaker: 0, text: `pending ${transcribeCalls}` }] }),
+        { headers: { 'Content-Type': 'application/json' } });
+    }
+    if (target === 'http://section-test/v1/chat/completions') {
+      const request = JSON.parse(options.body), prompt = request.messages[1].content;
+      if (prompt.startsWith('候選名字：')) return openaiReply('{"hints":[]}');
+      if (!prompt.startsWith('結構：')) throw new Error(`unexpected local LLM prompt: ${prompt.slice(0, 40)}`);
+      summaryCalls++; capturedPrompt = prompt;
+      if (holdSummary) {
+        holdSummary = false;
+        signalSummary();
+        await new Promise(resolve => { releaseSummary = resolve; });
+      }
+      return openaiReply(summaryText);
+    }
+    throw new Error(`unexpected external request: ${target}`);
+  };
+  try {
+    const start = await admin(`${base}/${draft.id}/summarize`, json('POST', {}));
+    assert.equal(start.status, 202, 'summary reserves processing before it starts');
+    const started = await Promise.race([summaryStarted.then(() => true), pause(5000).then(() => false)]);
+    assert.equal(started, true, `summary model was not reached; meeting=${JSON.stringify(await (await admin(`${base}/${draft.id}`)).json())}`);
+
+    const inFlight = await (await admin(`${base}/${draft.id}`)).json();
+    assert.deepEqual(inFlight.segments.map(s => s.sectionId), [pendingId, existingId]);
+    assert.deepEqual(inFlight.segments.map(s => s.speaker), [1, 0], 'the pending section receives a distinct speaker number');
+    assert.deepEqual(inFlight.segments.map(s => s.start), [0, 12], 'timestamps remain local to each section');
+    assert.match(inFlight.summary, /\[2\]/);
+    assert.deepEqual([inFlight.actions[0].cite, inFlight.comments[0].seg, inFlight.speakerHints[0].evidence], [2, 2, [2]]);
+    const directive = capturedPrompt.slice(capturedPrompt.indexOf('錄音段落順序'));
+    assert.ok(directive.indexOf('1. Pending B') < directive.indexOf('2. Existing A'), 'summary prompt explicitly preserves current section order');
+    assert.ok(capturedPrompt.indexOf('## Pending B') < capturedPrompt.indexOf('## Existing A'), 'transcript headings follow the same order');
+    assert.match(capturedPrompt, /必須包含這些段落：## 摘要、## 重點、## 決策、## 待辦事項/);
+
+    assert.equal((await admin(`${base}/${draft.id}/summarize`, json('POST', {}))).status, 409, 'a second summary cannot reserve an already busy meeting');
+    assert.equal((await admin(`${base}/${draft.id}`, json('PATCH', { lang: 'zh-TW' }))).status, 409);
+    assert.equal((await admin(`${base}/${draft.id}`, json('PATCH', { sections: [{ id: pendingId, title: 'Pending B' }, { id: existingId, title: 'Existing A' }] }))).status, 409);
+    assert.equal((await appendMedia(draft.id, 'busy.wav', 'Busy', Buffer.from('busy'))).status, 409);
+    const noteEdit = await admin(`${base}/${draft.id}`, json('PATCH', { notes: 'Edited while summary was waiting.' }));
+    assert.equal(noteEdit.status, 200);
+    releaseSummary();
+
+    const done = await waitMeeting(draft.id, m => m.status === 'done');
+    assert.equal(done.summaryStale, true, 'notes changed after the model input was captured');
+    assert.equal(done.notes, 'Edited while summary was waiting.');
+    assert.equal(transcribeCalls, 1, 'the already transcribed section was reused');
+    assert.equal(summaryCalls, 1);
+
+    const again = await admin(`${base}/${draft.id}/summarize`, json('POST', {}));
+    assert.equal(again.status, 202);
+    const cachedDone = await waitMeeting(draft.id, m => m.status === 'done');
+    assert.equal(transcribeCalls, 1, 'a second summary does not retranscribe cached sections');
+    assert.deepEqual(cachedDone.segments.map(s => s.speaker), [1, 0]);
+    assert.equal(cachedDone.summaryStale, false);
+  } finally {
+    releaseSummary?.();
+    globalThis.fetch = originalFetch;
+    for (const [key, value] of Object.entries(savedEnv)) value === undefined ? delete process.env[key] : process.env[key] = value;
   }
 });
