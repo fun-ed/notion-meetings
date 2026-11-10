@@ -259,3 +259,43 @@ test('copy uses rendered plain text, scopes transcript sections and reports clip
   assert.equal(status.textContent, '尚無可複製的內容');
   assert.equal(writes.length, 3);
 });
+
+test('processing actions distinguish pending audio, fresh summaries and stale summaries', () => {
+  const context = vm.createContext({});
+  vm.runInContext(script.slice(script.indexOf('function processingAction('), script.indexOf('function render(')), context);
+  const action = m => JSON.parse(JSON.stringify(context.processingAction(m)));
+  assert.equal(context.processingAction({ sections: [] }), null);
+  assert.deepEqual(action({ sections: [{ transcribed: false }], summary: '' }), { label: '轉錄並產生摘要', primary: true, retranscribe: false });
+  assert.deepEqual(action({ sections: [{ transcribed: true }], summary: '' }), { label: '產生摘要', primary: true, retranscribe: true });
+  assert.deepEqual(action({ sections: [{ transcribed: true }], summary: '摘要', summaryStale: true }), { label: '更新摘要', primary: true, retranscribe: true });
+  assert.deepEqual(action({ sections: [{ transcribed: true }], summary: '摘要' }), { label: '重新產生摘要', primary: false, retranscribe: true });
+  assert.equal(action({ sections: [{ transcribed: true }, { transcribed: false }], summary: '舊摘要' }).label, '轉錄並產生摘要');
+});
+
+test('mobile sidebar starts closed, closes after navigation and preserves desktop preference', () => {
+  const classes = new Set(), stored = new Map(), writes = [];
+  let changed, navigate, focused;
+  const media = { matches: true, addEventListener: (_event, callback) => { changed = callback; } };
+  const context = vm.createContext({
+    matchMedia: () => media, setSideWidth: () => {},
+    document: { body: { classList: { contains: name => classes.has(name), toggle: (name, value) => value ? classes.add(name) : classes.delete(name) } } },
+    localStorage: { getItem: name => stored.get(name), setItem: (name, value) => { writes.push([name, value]); stored.set(name, value); } },
+    $: selector => selector === 'aside' ? { addEventListener: (_event, callback) => { navigate = callback; } } : { focus: () => { focused = selector; } },
+  });
+  vm.runInContext(script.slice(script.indexOf('const narrowScreen ='), script.indexOf("$('#resizer').addEventListener")), context);
+  assert.equal(classes.has('side-collapsed'), true);
+  assert.equal(writes.length, 0);
+  context.toggleSide(false);
+  assert.equal(focused, 'aside a:not([hidden])');
+  navigate({ target: { closest: () => ({}) } });
+  assert.equal(classes.has('side-collapsed'), true);
+  assert.equal(focused, '#side-open');
+  media.matches = false; changed();
+  assert.equal(classes.has('side-collapsed'), false);
+  context.toggleSide(true);
+  assert.equal(stored.get('sideCollapsed'), '1');
+  media.matches = true; changed(); context.toggleSide(false);
+  assert.equal(stored.get('sideCollapsed'), '1', 'opening the mobile overlay must not change desktop preference');
+  media.matches = false; changed();
+  assert.equal(classes.has('side-collapsed'), true);
+});

@@ -28,7 +28,7 @@
   body.side-collapsed #resizer { display:none; }
   .side-btn { border:0; background:none; color:var(--muted); padding:0 6px; font-size:16px; line-height:1; }
   #side-open { position:fixed; top:10px; left:10px; z-index:20; display:none; background:var(--side); border:1px solid var(--line); border-radius:6px; padding:2px 8px; }
-  body.side-collapsed #side-open { display:block; }
+  body.side-collapsed:not(.anon) #side-open { display:block; }
   input, textarea, select { background:var(--input); }
   a { color:inherit; }
   input[type=checkbox], input[type=radio] { accent-color:var(--accent); }
@@ -197,7 +197,10 @@
   .section-row + .section-row { margin-top:6px; font-size:13px; }
   .section-row input { flex:1; min-width:100px; border:1px solid var(--line); border-radius:4px; padding:3px 6px; }
   .section-row a { overflow-wrap:anywhere; min-width:0; }
-  .section-heading { margin:20px 0 8px; font-size:17px; border-bottom:1px solid var(--line); }
+  .section-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; margin:20px 0 8px; font-size:17px; border-bottom:1px solid var(--line); }
+  .section-heading span { min-width:0; overflow-wrap:anywhere; }
+  .section-heading button { flex-shrink:0; font-size:13px; font-weight:400; }
+  #msg:empty { display:none; }
   .markdown { overflow-wrap:anywhere; }
   .markdown h1 { font-size:26px; } .markdown h2 { font-size:22px; } .markdown h3 { font-size:18px; }
   .markdown p { margin:8px 0; white-space:pre-wrap; }
@@ -214,6 +217,12 @@
   .copy-source .todo { display:block; }
   [hidden] { display:none !important; }
   @media (max-width:700px) {
+    body, body.side-collapsed { grid-template-columns:minmax(0, 1fr); }
+    aside { position:fixed; inset:0 auto 0 0; width:min(280px, 85vw); z-index:30; border-right:1px solid var(--line); }
+    #resizer { display:none; }
+    body.side-collapsed .page { padding-top:52px; }
+    .seg { grid-template-columns:44px minmax(0, 1fr); }
+    .seg > span { grid-column:1 / -1; }
     .page { padding:20px 20px 80px; } .prop { grid-template-columns:100px minmax(0, 1fr); }
     .ai-head, .player { flex-wrap:wrap; } .ai-head .spacer, .player .spacer { display:none; }
     .ai-head .muted, .ai-head button, .player button, .player .muted { white-space:nowrap; flex-shrink:0; }
@@ -226,7 +235,7 @@
   <a href="#new" data-r="new" id="nav-new">＋ 新會議</a>
   <a href="#" data-r="db">📅 會議紀錄</a>
   <a href="#search" data-r="search">🔍 搜尋<span class="kbd">⌘K</span></a>
-  <a href="#actions" data-r="actions">✅ Action Items</a>
+  <a href="#actions" data-r="actions">✅ 待辦事項</a>
   <a href="#people" data-r="people">👥 成員與團隊</a>
   <div class="side-h">最近的會議</div>
   <nav id="list"></nav>
@@ -651,7 +660,7 @@ async function showActions() {
   const view = (k, label) => `<button class="view ${act.status === k ? 'on' : ''}" onclick="act.status='${k}'; showActions()">${label}</button>`;
   const pick = (label, key, values) => `<label class="muted">${label} <select onchange="act.${key} = this.value; renderActions()">
     <option value="">全部</option>${values.map(v => `<option ${act[key] === v ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></label>`;
-  page(`<div class="icon">✅</div><h1>Action Items</h1>
+  page(`<div class="icon">✅</div><h1>待辦事項</h1>
     <p class="muted">從每場會議摘要整理出的待辦事項。負責人會依「成員與團隊」名錄對應團隊與 Y leader；勾選後會同步回該場會議。</p>
     <div class="views">${view('open', '☐ 未完成')}${view('done', '☑ 已完成')}${view('all', '▦ 全部')}<span class="spacer"></span>
       <label class="muted">分組 <select onchange="act.group = this.value; renderActions()">${[['meeting', '會議'], ['team', '團隊'], ['owner', '負責人'], ['leader', 'Y leader'], ['none', '不分組']]
@@ -800,9 +809,10 @@ function saveNotes() {
 }
 
 function notesEditor(m, canEdit) {
-  return `<div class="notes-tools"><span class="muted">Markdown 筆記</span><span class="spacer"></span>
+  return `<div class="notes-tools"><span>我的筆記</span><span class="muted">支援 Markdown</span><span class="spacer"></span>
+    <span id="copy-status" class="muted" role="status"></span><button id="copy-current" data-keep data-copy-kind="notes" onclick="copyContent('notes')" ${m.notes?.trim() ? '' : 'disabled'}>複製筆記</button>
     ${canEdit ? `<button data-keep onclick="notesPreview = !notesPreview; render(current)">${notesPreview ? '編輯' : '預覽'}</button>` : ''}
-    ${canEdit ? '<button onclick="saveNotes().catch(e => alert(e.message))">儲存筆記</button>' : ''}</div>
+    ${canEdit ? '<button title="筆記也會自動儲存" onclick="saveNotes().catch(e => alert(e.message))">立即儲存</button>' : ''}</div>
     ${notesPreview || !canEdit ? `<div class="markdown">${markdown(m.notes) || '<p class="muted">尚無筆記</p>'}</div>`
       : `<textarea id="notes" class="notes" placeholder="# 會議筆記\n\n可以先記下議程、問題或重點，再加入錄音與影片。" aria-label="我的筆記" oninput="editNotes(this.value)" onchange="saveNotes().catch(() => {})">${esc(m.notes)}</textarea>`}
     <p id="notes-status" class="muted" role="status">${pendingNotes.has(m.id) ? '尚未儲存' : '已儲存'}</p>`;
@@ -1033,6 +1043,16 @@ async function openMeeting(id) {
   if (BUSY.includes(m.status)) pollTimer = setTimeout(() => openMeeting(id), 2000);
 }
 
+function processingAction(m) {
+  if (!m.sections.length) return null;
+  const pending = m.sections.some(s => !s.transcribed);
+  return {
+    label: pending ? '轉錄並產生摘要' : !m.summary ? '產生摘要' : m.summaryStale ? '更新摘要' : '重新產生摘要',
+    primary: pending || !m.summary || m.summaryStale === true,
+    retranscribe: m.sections.some(s => s.transcribed),
+  };
+}
+
 function render(m) {
   pick = null; // a re-render drops the range picker
   const busy = BUSY.includes(m.status);
@@ -1043,11 +1063,10 @@ function render(m) {
   const keepAudio = $('#audio')?.dataset.id === m.id && $('#audio')?.dataset.section === selectedSection && $('#audio');
   const speakerIds = [...new Set(m.segments.map(s => s.speaker))].sort((a, b) => a - b);
   const canEdit = rank(m.perm) >= rank('edit');
-  const staleNote = m.summaryStale && !busy ? `<p class="notice">筆記、講者或 section 已變更，摘要與待辦事項尚未更新。
-    ${canEdit ? '<button onclick="resummarize()">↻ 重新產生摘要</button>' : ''}</p>` : '';
+  const action = processingAction(m);
+  const pendingCount = m.sections.filter(s => !s.transcribed).length;
+  const staleNote = m.summaryStale && !busy ? '<p class="notice">會議內容已變更，摘要與待辦事項尚未更新。</p>' : '';
   const spkOpts = (cur, extra = '') => speakerIds.filter(x => x !== cur).map(x => `<option value="${x}">${esc(spk(m, x))}</option>`).join('') + extra;
-  const copyKind = m.sections.length ? tab : 'notes';
-  const copyAvailable = copyKind === 'transcript' ? m.segments.length : m[copyKind]?.trim();
   const bodies = {
     summary: busy && !m.summary ? `<p class="muted">⏳ ${STATUS[m.status][0]}…</p>`
       : `${staleNote}<div class="summary markdown">${renderSummary(m) || '<p class="muted">尚無摘要</p>'}</div>`,
@@ -1055,7 +1074,8 @@ function render(m) {
     transcript: !m.segments.length ? `<p class="muted">${busy ? `⏳ ${STATUS[m.status][0]}…` : '沒有逐字稿'}</p>` : `
       <div class="speakers">${speakerIds.map(s => `<label style="color:${COLORS[s % COLORS.length]}">${esc(`Speaker ${s < 26 ? String.fromCharCode(65 + s) : s + 1}`)}
         <input type="text" list="dl-people" value="${esc(m.speakers[s] ?? '')}" placeholder="輸入姓名" onchange="renameSpeaker(${s}, this.value)">${speakerIds.length > 1
-          ? `<select aria-label="把 ${esc(spk(m, s))} 的所有段落併入另一位講者" onchange="mergeSpeaker(${s}, +this.value)"><option value="">併入…</option>${spkOpts(s)}</select>` : ''}</label>`).join('')}</div>
+          ? `<select aria-label="把 ${esc(spk(m, s))} 的所有段落併入另一位講者" onchange="mergeSpeaker(${s}, +this.value)"><option value="">併入…</option>${spkOpts(s)}</select>` : ''}</label>`).join('')}
+        <span class="spacer"></span><span id="copy-status" class="muted" role="status"></span><button id="copy-current" data-keep data-copy-kind="transcript" onclick="copyContent('transcript')">複製全部逐字稿</button></div>
       ${hintsHtml(m, canEdit)}
       ${canEdit ? '<p class="muted">講者分錯時，點段落前的名字改成別人，Shift＋點另一段的名字可以一次改一整段範圍；整個講者是同一人時用「併入…」。</p>' : ''}
       ${canEdit ? `<div class="learn-row"><input aria-label="加入團隊術語" placeholder="＋ 加入團隊術語（例如聽錯的專有名詞），下次轉錄起生效" onchange="addTeamTerm(this)"><span id="term-msg" class="muted"></span></div>` : ''}
@@ -1066,7 +1086,8 @@ function render(m) {
       ${m.segments.some(s => s.raw && s.raw !== s.text) ? `<label class="muted"><input type="checkbox" data-keep ${showRaw ? 'checked' : ''} onchange="showRaw = this.checked; render(current)"> 顯示原始辨識結果（未轉繁體、未校對）</label>` : ''}
       ${m.segments.map((s, i) => { const text = showRaw ? s.raw ?? s.text : tidyView ? tidy(s.text) : s.text;
         const boundary = i === 0 || s.sectionId !== m.segments[i - 1].sectionId;
-        return `${boundary ? `<h3 class="section-heading">${esc(m.sections.find(x => x.id === s.sectionId)?.title ?? m.originalName)}</h3>` : ''}<div class="seg${text ? '' : ' filler'}" id="seg-${i + 1}"><time onclick="seek(${i + 1})">${fmt(s.start)}</time>
+        const sectionId = s.sectionId ?? 'legacy', sectionIndex = m.sections.findIndex(section => section.id === sectionId);
+        return `${boundary ? `<h3 class="section-heading"><span>${esc(m.sections[sectionIndex]?.title ?? m.originalName)}</span><button data-keep aria-label="複製 Section ${sectionIndex + 1} 逐字稿" onclick="copyContent('transcript', '${sectionId}')">複製這段</button></h3>` : ''}<div class="seg${text ? '' : ' filler'}" id="seg-${i + 1}"><time onclick="seek(${i + 1})">${fmt(s.start)}</time>
         <b style="color:${COLORS[s.speaker % COLORS.length]}" ${canEdit ? `class="pick" title="點一下改講者；Shift＋點另一段選範圍" onclick="pickSpeaker(${i}, event)"` : ''}>${esc(spk(m, s.speaker))}</b><span>${esc(text).replaceAll('【?】', '<mark title="辨識不確定，請對照錄音">【?】</mark>')}</span></div>`; }).join('')}`,
   };
   page(`<div class="crumb"><a href="#">會議紀錄</a> / ${esc(m.title)}</div>
@@ -1075,12 +1096,12 @@ function render(m) {
     <div class="props">
       ${prop('🕐', '時間', `<input type="datetime-local" aria-label="會議時間" value="${m.scheduledAt || localInput(m.createdAt)}" onchange="patch({ scheduledAt: this.value })">`)}
       ${prop('📍', '地點', `<input aria-label="地點" placeholder="空白" value="${esc(m.location)}" onchange="patch({ location: this.value })">`)}
-      ${prop('📝', '摘要', `<input aria-label="摘要" placeholder="一句話說明這場會議" value="${esc(m.brief)}" onchange="patch({ brief: this.value })">`)}
+      ${prop('📝', '簡述', `<input aria-label="簡述" placeholder="一句話說明這場會議" value="${esc(m.brief)}" onchange="patch({ brief: this.value })">`)}
       ${prop('🏷', '標籤', m.tags.map((t, i) => tagLink(t).replace('</a>', `</a><button class="tag-x" aria-label="移除標籤 ${esc(t)}" onclick="setTags(current.tags.filter((_, k) => k !== ${i}))">×</button>`)).join('')
         + `<input class="tag-add" list="dl-tags" aria-label="新增標籤" placeholder="＋ 新增標籤" onchange="setTags([...current.tags, canon(this.value, allTags())])">`)}
       ${prop('🤖', 'Agent', `<select aria-label="Agent" onchange="patch({ agentId: this.value })">${aiCfg.agents.filter(a => a.enabled !== false || a.id === m.agentId)
         .map(a => `<option value="${a.id}" ${(m.agentId || 'general') === a.id ? 'selected' : ''} title="${esc(a.description)}">${esc(a.name)}</option>`).join('')}</select>
-        <span class="muted">換了 Agent 後按「重新產生摘要」套用</span>`)}
+        <span class="muted">產生或更新摘要時套用</span>`)}
       ${prop('◉', '類型', tag(TYPES[m.template] ?? TYPES.auto))}
       ${prop('◎', '狀態', tag(STATUS[m.status] ?? [m.status, 'gray']) + (m.error ? ` <span class="err">${esc(m.error)}</span>` : ''))}
       ${prop('👥', '參與者', m.people.map(p => `<span class="tag gray" title="${esc(p.leader ? `Y leader：${p.leader}` : '')}">${esc(p.name)}${p.team ? ` · ${esc(p.team)}` : ''}</span>`
@@ -1090,38 +1111,35 @@ function render(m) {
       ${prop('🌐', '轉錄語言', `<select id="lang" aria-label="轉錄語言" onchange="patch({ lang: this.value }).catch(e => alert(e.message))" ${busy || uploading ? 'disabled' : ''}>${LANGS.map(([v, t]) => `<option value="${v}" ${m.lang === v ? 'selected' : ''}>${t}</option>`).join('')}</select>` + (m.language ? ` <span class="muted">偵測為 ${esc(m.language)}</span>` : ''))}
       ${prop('📖', '術語', `<textarea rows="1" aria-label="術語" placeholder="空白" onchange="patch({ glossary: this.value })">${esc(m.glossary)}</textarea>`
         + (teamTerms.length ? `<span class="muted" title="${esc(teamTerms.join('、'))}">另有 ${teamTerms.length} 個團隊術語；轉錄最多送 200 個，以這場會議的術語優先，校對清單不受此限制。</span>` : ''))}
-      ${prop('📎', '媒體', m.sections.length ? `${m.sections.length} 個 section` : '<span class="muted">尚未加入，可先寫筆記</span>')}
-      ${prop('📊', 'AI 用量', (m.usage ?? []).length ? `${usageLine(totalOf(m.usage))}<details><summary class="muted">每次呼叫明細</summary>${usageRows([...m.usage].reverse())}</details>` : '<span class="muted">尚無紀錄</span>')}
+      ${prop('📎', '媒體', m.sections.length ? `${m.sections.length} 個檔案` : '<span class="muted">尚未加入，可先寫筆記</span>')}
+      ${(m.usage ?? []).length ? prop('📊', 'AI 用量', `${usageLine(totalOf(m.usage))}<details><summary class="muted">每次呼叫明細</summary>${usageRows([...m.usage].reverse())}</details>`) : ''}
       ${prop('🔒', '權限', m.perm === 'owner'
         ? `<select aria-label="其他人的權限" data-keep onchange="patch({ access: this.value })">${ACCESS.map(([v, t]) => `<option value="${v}" ${m.access === v ? 'selected' : ''}>${t}</option>`).join('')}</select>
            <button class="ghost" data-keep onclick="openShares()">🔗 分享連結</button><div id="sharePanel"></div>`
         : `你的權限：${tag([PERMS[m.perm], 'blue'])}`)}
     </div>
     <div class="ai-block">
-      <div class="ai-head">🎙️ AI 會議筆記<span class="muted">${day(m.createdAt)}</span><span class="spacer"></span>
-        ${m.sections.length ? `<button class="ghost" onclick="resummarize(true)" ${busy || uploading || rec?.state === 'recording' ? 'disabled' : ''} title="用目前術語重新轉錄所有 section">↻ 重新轉錄</button>` : ''}</div>
-      <div class="notes-tools"><span id="copy-status" class="muted" role="status"></span><span class="spacer"></span>
-        <button id="copy-current" data-keep data-copy-kind="${copyKind}" onclick="copyContent('${copyKind}')" ${copyAvailable ? '' : 'disabled'}>複製${{ summary: '摘要', notes: '筆記', transcript: '全部逐字稿' }[copyKind]}</button></div>
+      <div class="ai-head">🎙️ 錄音與筆記<span class="muted">${day(m.createdAt)}</span><span class="spacer"></span>
+        ${canEdit && action?.retranscribe ? `<button class="ghost" onclick="resummarize(true)" ${busy || uploading || rec?.state === 'recording' ? 'disabled' : ''} title="已轉錄的部分也會重跑，並套用目前的術語">全部重新轉錄</button>` : ''}</div>
       ${m.sections.length ? '' : bodies.notes}
       <div class="ai-start">
-        ${canEdit ? `<button id="recBtn" class="${rec?.state === 'recording' ? 'rec' : 'primary'}" onclick="toggleRec()" ${busy || uploading || !window.MediaRecorder ? 'disabled' : ''}>${rec?.state === 'recording' ? '■ 停止錄音並加入 section' : '開始錄音'}</button>
+        ${canEdit ? `<button id="recBtn" class="${rec?.state === 'recording' ? 'rec' : m.sections.length ? '' : 'primary'}" onclick="toggleRec()" ${busy || uploading || !window.MediaRecorder ? 'disabled' : ''}>${rec?.state === 'recording' ? '■ 停止錄音' : '開始錄音'}</button>
         <span id="recTime" class="muted"></span><span class="spacer"></span>
         <button onclick="$('#file').click()" ${busy || uploading || rec?.state === 'recording' ? 'disabled' : ''}>上傳音訊或影片</button>
         <input type="file" id="file" hidden multiple accept="audio/*,video/*,.mp4,.m4a,.mp3,.wav,.webm,.mov,.aac,.ogg,.flac" onchange="uploadFile()">
-        <button onclick="resummarize()" ${busy || uploading || rec?.state === 'recording' || !m.sections.length ? 'disabled' : ''}>產生會議筆記</button>` : ''}
+        ${action ? `<button id="process-meeting" class="${action.primary ? 'primary' : ''}" onclick="resummarize()" ${busy || uploading || rec?.state === 'recording' ? 'disabled' : ''}>${action.label}</button>` : ''}` : ''}
       </div>
       ${canEdit ? `<label class="muted"><input type="checkbox" id="capOn" ${localStorage.getItem('captions') === '1' ? 'checked' : ''} onchange="localStorage.setItem('captions', this.checked ? '1' : '0')"> 即時字幕預覽（只用瀏覽器本機辨識）</label>
       <div id="live" aria-live="polite" ${rec?.state === 'recording' ? '' : 'hidden'}></div>` : ''}
-      <p id="msg" class="muted" role="status">${uploading ? '上傳中…' : '可一次加入多個檔案，依加入順序排列；可命名與調整順序，再產生整體摘要。'}</p>
+      <p id="msg" class="muted" role="status">${uploading ? '上傳中…' : pendingCount ? `${pendingCount} 個檔案待轉錄。${canEdit ? '確認順序後按「轉錄並產生摘要」。' : ''}` : ''}</p>
       <div class="sections" aria-label="媒體 sections">${m.sections.map((s, i) => `<section class="media-section">
-        <div class="section-row"><span class="muted">Section ${i + 1}</span>
+        <div class="section-row"><span class="muted">第 ${i + 1} 部分</span>
           <input aria-label="Section ${i + 1} 名稱" value="${esc(s.title)}" maxlength="200" onchange="changeSection('${s.id}', this.value)" ${busy || uploading || !canEdit ? 'disabled' : ''}>
           ${canEdit ? `<button aria-label="上移 Section ${i + 1}" onclick="changeSection('${s.id}', null, -1)" ${busy || uploading || i === 0 ? 'disabled' : ''}>↑</button>
           <button aria-label="下移 Section ${i + 1}" onclick="changeSection('${s.id}', null, 1)" ${busy || uploading || i === m.sections.length - 1 ? 'disabled' : ''}>↓</button>` : ''}</div>
         <div class="section-row"><button data-keep aria-pressed="${selectedSection === s.id}" onclick="playSection('${s.id}')">${selectedSection === s.id ? '目前播放' : '播放'}</button>
           <a href="/api/meetings/${m.id}/audio?section=${s.id}&download" download>${esc(s.originalName)}</a>
-          <span class="muted">${s.transcribed ? '已轉錄' : '待轉錄'}</span>
-          <button data-keep aria-label="複製 Section ${i + 1} 逐字稿" onclick="copyContent('transcript', '${s.id}')" ${m.segments.some(seg => (seg.sectionId ?? 'legacy') === s.id) ? '' : 'disabled'}>複製逐字稿</button></div>
+          <span class="muted">${s.transcribed ? '已轉錄' : '待轉錄'}</span></div>
       </section>`).join('')}</div>
       <div id="audioSlot"></div>
       <div class="player" ${m.sections.length ? '' : 'hidden'}>
@@ -1130,24 +1148,24 @@ function render(m) {
         <span class="spacer"></span><span class="muted">速度</span>
         ${[1, 1.2, 1.5, 2].map(r => `<button class="rate ${rate === r ? 'on' : ''}" data-r="${r}" aria-pressed="${rate === r}" onclick="setRate(${r})">${r}×</button>`).join('')}
       </div>
-      ${m.sections.length ? `<div class="tabs" role="tablist">${[['summary', '摘要'], ['notes', '筆記'], ['transcript', '逐字稿']].map(([k, t]) =>
+      ${m.sections.length ? `<div class="tabs" role="tablist">${[['summary', '摘要'], ['notes', '我的筆記'], ['transcript', '逐字稿']].map(([k, t]) =>
         `<button class="tab ${tab === k ? 'on' : ''}" role="tab" aria-selected="${tab === k}" onclick="setTab('${k}')">${t}</button>`).join('')}</div>` : ''}
       ${m.sections.length && tab === 'summary' ? `<div class="ai-foot">
-        <label class="muted">指示 <select id="tpl">${Object.entries(TYPES).map(([v, [t]]) => `<option value="${v}" ${m.template === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+        <label class="muted">類型 <select id="tpl">${Object.entries(TYPES).map(([v, [t]]) => `<option value="${v}" ${m.template === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
         <label class="muted">語言 <select id="outLang">${[['', '與逐字稿相同'], ['繁體中文（台灣）', '繁體中文'], ['English', 'English'], ['日本語', '日本語'], ['简体中文', '简体中文'], ['한국어', '한국어']]
           .map(([v, t]) => `<option value="${esc(v)}" ${m.outputLang === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
         <span class="spacer"></span>
-        <button onclick="resummarize()" ${busy || uploading || rec?.state === 'recording' || !m.sections.length ? 'disabled' : ''}>${m.segments.length ? '↻ 重新產生摘要' : '轉錄並產生摘要'}</button>
-        ${m.summaryBy ? `<span class="muted" style="width:100%">由 ${esc(m.summaryBy.agent)} · ${esc(m.summaryBy.model)}（effort ${esc(m.summaryBy.effort)}）產生</span>` : ''}
+        <span id="copy-status" class="muted" role="status"></span><button id="copy-current" data-keep data-copy-kind="summary" onclick="copyContent('summary')" ${m.summary?.trim() ? '' : 'disabled'}>複製摘要</button>
+        ${m.summaryBy ? `<details><summary class="muted">產生資訊</summary><span class="muted">${esc(m.summaryBy.agent)} · ${esc(m.summaryBy.model)} · ${esc(m.summaryBy.effort)}</span></details>` : ''}
         <details ${m.instructions ? 'open' : ''}><summary class="muted">自訂指示</summary>
           <textarea id="instr" placeholder="例如：列出所有提到的數字與截止日">${esc(m.instructions)}</textarea></details>
       </div>` : ''}
       ${m.sections.length ? bodies[tab] : ''}
     </div>
-    <h2 class="h2">✅ Action Items</h2>
+    <h2 class="h2">✅ 待辦事項</h2>
     ${staleNote}${m.actions.map((a, i) => todo(m, a, i, markdown(a.text, true), tag([a.owner || '未指定', 'purple']) + (a.team ? teamLink(a.team) : '') + (a.cite ? cites(`[${a.cite}]`) : ''))).join('')
       || '<p class="muted">摘要產生後，待辦事項會出現在這裡。</p>'}
-    <p class="muted"><a href="#actions">在 Action Items 追蹤所有會議的待辦 →</a></p>
+    <p class="muted"><a href="#actions">查看所有會議的待辦 →</a></p>
     <h2 class="h2">💬 留言</h2>
     ${(m.comments ?? []).map(c => `<div class="comment"><b>${esc(c.name)}</b> <span class="muted">${dt(c.createdAt)}
       ${c.seg ? `· <a href="#${m.id}:seg-${c.seg}" onclick="return seek(${c.seg})">逐字稿第 ${c.seg} 段</a>` : ''}</span>
@@ -1160,7 +1178,7 @@ function render(m) {
   // Below edit permission, lock every editing control; viewing, playback and (if allowed) commenting stay usable.
   if (rank(m.perm) < rank('edit')) {
     document.querySelectorAll('main input, main textarea, main select').forEach(el => { if (!el.matches('[data-keep]')) el.disabled = true; });
-    document.querySelectorAll('main .tag-x, main .tag-add, .ai-head .ghost, .ai-foot button, .speakers select').forEach(el => { el.hidden = true; });
+    document.querySelectorAll('main .tag-x, main .tag-add, .ai-head .ghost, .ai-foot button:not([data-keep]), .speakers select').forEach(el => { el.hidden = true; });
   }
   if (!m.sections.length) return;
   const audio = keepAudio || Object.assign(document.createElement('audio'), { id: 'audio', controls: true, preload: 'metadata', src: `/api/meetings/${m.id}/audio?section=${selectedSection}` });
@@ -1408,12 +1426,17 @@ function setSideWidth(w) {
   document.documentElement.style.setProperty('--side-w', `${w}px`);
   localStorage.setItem('sideW', w);
 }
+const narrowScreen = matchMedia('(max-width:700px)');
 function toggleSide(collapse = !document.body.classList.contains('side-collapsed')) {
   document.body.classList.toggle('side-collapsed', collapse);
-  localStorage.setItem('sideCollapsed', collapse ? '1' : '');
+  if (!narrowScreen.matches) localStorage.setItem('sideCollapsed', collapse ? '1' : '');
+  else (collapse ? $('#side-open') : $('aside a:not([hidden])'))?.focus();
 }
 setSideWidth(+localStorage.getItem('sideW') || 240);
-toggleSide(localStorage.getItem('sideCollapsed') === '1');
+const syncSidebar = () => document.body.classList.toggle('side-collapsed', narrowScreen.matches || localStorage.getItem('sideCollapsed') === '1');
+syncSidebar();
+narrowScreen.addEventListener('change', syncSidebar);
+$('aside').addEventListener('click', e => { if (narrowScreen.matches && e.target.closest('a[href^="#"]')) toggleSide(true); });
 $('#resizer').addEventListener('pointerdown', e => {
   e.preventDefault();
   document.body.classList.add('resizing');
@@ -1425,6 +1448,7 @@ $('#resizer').addEventListener('pointerdown', e => {
 $('#resizer').addEventListener('dblclick', () => setSideWidth(240));
 
 document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && narrowScreen.matches && !document.body.classList.contains('side-collapsed')) toggleSide(true);
   if ((e.metaKey || e.ctrlKey) && e.key === '\\') { e.preventDefault(); toggleSide(); }
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
     e.preventDefault();
