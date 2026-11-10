@@ -158,6 +158,18 @@
   .seg.active { border-left-color:var(--accent); background:var(--active-bg); box-shadow:0 0 0 1px var(--active-ring); animation:seg-glow .7s ease-out; }
   @keyframes seg-glow { from { box-shadow:0 0 0 5px rgba(35,131,226,.35); } to { box-shadow:0 0 0 1px var(--active-ring); } }
   .player { display:flex; gap:6px; align-items:center; margin-top:6px; }
+  .current-section { margin:8px 0 0; font-size:14px; overflow-wrap:anywhere; }
+  .review { margin:12px 0; }
+  .review-form { display:grid; gap:8px; }
+  .review-form label { display:grid; gap:3px; color:var(--muted); font-size:14px; }
+  .review-form select, .review-form input, .review-form textarea { width:100%; min-width:0; border:1px solid var(--line); border-radius:6px; padding:6px 8px; color:var(--fg); }
+  .review-form textarea { min-height:110px; resize:vertical; }
+  .review-question { white-space:pre-wrap; overflow-wrap:anywhere; }
+  .review-message { border-top:1px solid var(--line); padding:10px 0; }
+  .review-actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
+  .review-sources { margin:2px 0; }
+  .review-sources li { overflow-wrap:anywhere; }
+
   .player button { font-size:13px; padding:1px 8px; }
   .player .rate.on { background:var(--fg); border-color:var(--fg); color:var(--bg); }
   .seg.hl { background:var(--hl); }
@@ -278,7 +290,7 @@ const whenLabel = m => m.scheduledAt ? m.scheduledAt.replace('T', ' ').replaceAl
 const allTags = () => [...new Set(meetings.flatMap(m => m.tags))].sort();
 const num = n => Math.round(n ?? 0).toLocaleString();
 const secs = ms => `${((ms ?? 0) / 1000).toFixed(1)} 秒`;
-const KIND = { transcribe: '轉錄', correct: '術語校對', summary: '摘要', speakers: '講者建議', test: '連線測試' };
+const KIND = { transcribe: '轉錄', correct: '術語校對', summary: '摘要', review: '會議檢討', speakers: '講者建議', test: '連線測試' };
 const usd = n => n ? `$${n.toFixed(4)}` : '';
 // Anthropic's input_tokens excludes cached input; the real prompt size is input + cache read + cache write.
 const inTotal = e => (e.inputTokens ?? 0) + (e.cacheReadTokens ?? 0) + (e.cacheWriteTokens ?? 0);
@@ -295,6 +307,13 @@ const prop = (icon, label, html) => `<div class="prop"><span>${icon} ${label}</s
 let rate = +localStorage.getItem('rate') || 1, activeSeg = 0, pick = null; // pick: open speaker range picker {from, to}
 let meetings = [], current = null, pollTimer = null, tab = 'summary', showRaw = false, tidyView = localStorage.getItem('tidy') !== '0', searchQ = '', searchTimer;
 let me = null, authInfo = {}, aiCfg = { models: [], agents: [] }, teamTerms = []; // teamTerms: enabled team glossary (learning loop P1)
+let reviewStates = new Map(), reviewPromptsCache = null, reviewPromptsUserId = null, reviewPromptRequest = null, reviewAccountId = null, reviewEpoch = 0;
+function resetReviewData(accountId = null) {
+  reviewEpoch++;
+  reviewStates.clear();
+  reviewPromptsCache = reviewPromptsUserId = reviewPromptRequest = null;
+  reviewAccountId = accountId;
+}
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const rank = level => ['none', 'view', 'comment', 'edit', 'owner'].indexOf(level);
 const json = (method, body) => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -306,8 +325,8 @@ async function api(path, opts = {}) {
   const res = await fetch(path, opts);
   const body = await res.json();
   // Expired or missing session: back to the login screen (the auth endpoints report their own errors).
-  if (res.status === 401 && !path.startsWith('/api/auth/')) { me = null; showLogin('login'); }
-  if (!res.ok) throw new Error(body.error || res.statusText);
+  if (res.status === 401 && !path.startsWith('/api/auth/')) { me = null; resetReviewData(); showLogin('login'); }
+  if (!res.ok) { const error = new Error(body.error || res.statusText); error.status = res.status; throw error; }
   return body;
 }
 
@@ -367,11 +386,13 @@ async function checkLatest() {
   } catch {} // offline or rate-limited: keep the plain link
 }
 
-async function logout() { await api('/api/auth/logout', json('POST', {})); me = null; boot(); }
+async function logout() { await api('/api/auth/logout', json('POST', {})); resetReviewData(); me = null; boot(); }
 
 async function boot() {
   authInfo = await api('/api/auth/me');
-  me = authInfo.user;
+  const user = authInfo.user ?? null;
+  if (reviewAccountId !== user?.id) resetReviewData(user?.id ?? null);
+  me = user;
   document.body.classList.toggle('anon', !me);
   if (!me) return showLogin();
   renderWho();
@@ -758,10 +779,11 @@ async function saveDir() {
 
 // ---- 新會議 ----
 
-function markdown(text, inline = false) {
+function markdown(text, inline = false, allowImages = true) {
   const box = document.createElement('div');
   const renderer = new marked.Renderer();
   renderer.html = ({ text }) => esc(text);
+  if (!allowImages) renderer.image = ({ text }) => esc(text);
   box.innerHTML = DOMPurify.sanitize(marked[inline ? 'parseInline' : 'parse'](String(text ?? ''), {
     gfm: true, async: false, renderer,
   }), { USE_PROFILES: { html: true }, FORBID_ATTR: ['id', 'name', 'style'] });
@@ -793,10 +815,12 @@ function saveNotes() {
     for (const [id, notes] of pendingNotes) {
       try {
         const m = await api(`/api/meetings/${id}`, json('PATCH', { notes }));
+        invalidateReview(id);
         if (pendingNotes.get(id) === notes) pendingNotes.delete(id);
         if (current?.id === id) {
           current = { ...m, notes: pendingNotes.get(id) ?? m.notes };
           if ($('#notes-status')) $('#notes-status').textContent = pendingNotes.has(id) ? '尚未儲存' : '已儲存';
+          if (tab === 'review' && !reviewStates.get(id)?.asking) render(current);
         }
       } catch (e) {
         if (current?.id === id && $('#notes-status')) $('#notes-status').textContent = `儲存失敗：${e.message}，請按儲存重試`;
@@ -864,12 +888,23 @@ async function changeSection(id, title, delta = 0) {
   catch (e) { alert(e.message); render(current); }
 }
 
-function playSection(id) {
+function playSection(id, startPlayback = false) {
   if (selectedSection !== id) $('#audio')?.pause();
   selectedSection = id;
   activeSeg = 0;
   render(current);
-}
+  if (!startPlayback) return;
+  const audio = $('#audio');
+  if (!audio) return;
+  const failed = error => {
+    if (error?.name === 'AbortError' || $('#audio') !== audio) return;
+    const status = $('#player-status');
+    if (status) status.textContent = `無法播放：${error?.message || '瀏覽器拒絕播放此檔案'}`;
+  };
+  const status = $('#player-status');
+  if (status) status.textContent = '';
+  try { Promise.resolve(audio.play()).catch(failed); } catch (error) { failed(error); }
+ }
 
 // ---- 錄音 + 即時字幕 ----
 let rec, recog, recStart, tick;
@@ -977,6 +1012,255 @@ function renderSummary(m) {
   return box.innerHTML;
 }
 
+const REVIEW_QUESTION_MARKER = '\n\n【使用者問題】\n';
+function reviewState(id) {
+  if (!reviewStates.has(id)) reviewStates.set(id, { messages: [], question: '', selectedPrompt: '', promptTitle: '', prompt: '',
+    loading: false, loaded: false, needsRefresh: false, contextGeneration: 0, asking: false, savingPrompt: false, clearing: false, error: '', contextHash: null });
+  return reviewStates.get(id);
+}
+function invalidateReview(id) {
+  const state = reviewStates.get(id);
+  if (state) { state.contextGeneration++; state.needsRefresh = true; state.error = ''; }
+}
+const sameReviewSession = (userId, epoch) => me?.id === userId && reviewEpoch === epoch;
+function reviewPromptData(userId, epoch) {
+  if (reviewPromptsCache && reviewPromptsUserId === userId) return Promise.resolve(reviewPromptsCache);
+  if (reviewPromptRequest?.userId === userId && reviewPromptRequest.epoch === epoch) return reviewPromptRequest.promise;
+  const promise = api('/api/review-prompts').then(data => {
+    if (sameReviewSession(userId, epoch)) { reviewPromptsCache = data; reviewPromptsUserId = userId; }
+    return data;
+  }).finally(() => { if (reviewPromptRequest?.promise === promise) reviewPromptRequest = null; });
+  reviewPromptRequest = { userId, epoch, promise };
+  return promise;
+}
+function initializeReviewPrompt(state, prompts) {
+  if (state.promptInitialized) return;
+  const preset = prompts.presets?.find(p => p.id === 'question') ?? prompts.presets?.[0];
+  if (preset) {
+    state.selectedPrompt = `preset:${preset.id}`;
+    state.promptTitle = preset.title;
+    state.prompt = preset.prompt;
+  }
+  state.promptInitialized = true;
+}
+function reviewPrompt(state, prompts = reviewPromptsCache) {
+  if (!prompts) return null;
+  const [kind, id] = (state.selectedPrompt || '').split(':', 2);
+  return kind === 'preset' ? prompts.presets?.find(p => p.id === id)
+    : kind === 'custom' ? prompts.custom?.find(p => p.id === id) : null;
+}
+function selectReviewPrompt(value) {
+  if (!current) return;
+  const state = reviewState(current.id), prompt = reviewPrompt({ selectedPrompt: value });
+  if (!prompt) return;
+  state.selectedPrompt = value;
+  state.promptTitle = prompt.title;
+  state.prompt = prompt.prompt;
+  state.error = '';
+  renderReviewIfCurrent(current.id);
+}
+function setReviewField(field, value) {
+  if (current && ['question', 'promptTitle', 'prompt'].includes(field)) reviewState(current.id)[field] = value;
+}
+function reviewSourceLink(source) {
+  const title = esc(source?.title || source?.url || '來源');
+  if (!source?.url) return title;
+  try {
+    const url = new URL(source.url, location.href);
+    return ['http:', 'https:'].includes(url.protocol)
+      ? `<a href="${esc(url.href)}" target="_blank" rel="noopener noreferrer">${title}</a>` : title;
+  } catch { return title; }
+}
+function reviewAnswerMarkdown(text, citations = true) {
+  const box = document.createElement('div');
+  box.innerHTML = markdown(text, false, false);
+  if (citations) {
+    const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT), nodes = [];
+    while (walker.nextNode()) if (!walker.currentNode.parentElement.closest('a, code, pre')) nodes.push(walker.currentNode);
+    for (const node of nodes) {
+      if (!/\[\d+(?:\s*[,，、-]\s*\d+)*\]/.test(node.textContent)) continue;
+      const replacement = document.createElement('template');
+      replacement.innerHTML = cites(esc(node.textContent));
+      node.replaceWith(replacement.content);
+    }
+  }
+  return box.innerHTML;
+}
+const reviewVisibleQuestion = question => {
+  const index = question.indexOf(REVIEW_QUESTION_MARKER);
+  return index < 0 ? question : question.slice(index + REVIEW_QUESTION_MARKER.length);
+};
+
+async function loadReview(id, refresh = false) {
+  const state = reviewState(id);
+  if (state.loading || (state.loaded && !refresh && !state.needsRefresh)) return;
+  const userId = me?.id, epoch = reviewEpoch, generation = state.contextGeneration;
+  state.error = '';
+  state.loading = true;
+  try {
+    const [result, prompts] = await Promise.all([
+      api(`/api/meetings/${encodeURIComponent(id)}/review`), reviewPromptData(userId, epoch),
+    ]);
+    if (!sameReviewSession(userId, epoch)) return;
+    if (generation !== state.contextGeneration) { state.needsRefresh = true; return; }
+    state.messages = Array.isArray(result.messages) ? result.messages : [];
+    state.contextHash = result.contextHash ?? null;
+    state.loaded = true;
+    state.needsRefresh = false;
+    initializeReviewPrompt(state, prompts);
+  } catch (error) {
+    if (sameReviewSession(userId, epoch) && generation === state.contextGeneration) state.error = error.message;
+  } finally {
+    if (sameReviewSession(userId, epoch)) {
+      state.loading = false;
+      if (generation !== state.contextGeneration && !state.error) loadReview(id, true);
+      renderReviewIfCurrent(id);
+    }
+  }
+}
+function renderReviewIfCurrent(id) {
+  if (current?.id === id && tab === 'review' && $('#review-panel')?.dataset.meeting === id) render(current);
+}
+function retryReview() {
+  if (!current) return;
+  const state = reviewState(current.id);
+  state.error = '';
+  loadReview(current.id);
+  render(current);
+}
+function reviewPanel(m) {
+  const state = reviewState(m.id), canEdit = rank(m.perm) >= rank('edit');
+  const prompts = reviewPromptsUserId === me?.id ? reviewPromptsCache : null;
+  if (!state.loading && (!state.loaded || state.needsRefresh) && !state.error) loadReview(m.id, state.loaded);
+  if (prompts) initializeReviewPrompt(state, prompts);
+  if (!state.loaded) return `<section class="review" id="review-panel" data-meeting="${esc(m.id)}" aria-label="會議檢討">
+    <p class="muted">只有目前帳號能在此 app 查看對話；對話不隨會議分享。提問會交給目前設定的 AI 模型處理。</p>
+    ${state.error ? `<p class="err" role="alert">載入失敗：${esc(state.error)} <button data-keep onclick="retryReview()">重試</button></p>` : '<p class="muted" role="status">載入會議檢討…</p>'}
+  </section>`;
+  const selected = reviewPrompt(state, prompts);
+  const custom = prompts?.custom ?? [];
+  const options = [...(prompts?.presets ?? []).map(p => [`preset:${p.id}`, `內建：${p.title}`]),
+    ...custom.map(p => [`custom:${p.id}`, `我的：${p.title}`])];
+  const staleWarning = '<p class="notice">這則回答產生後，會議內容已有變更；回答中的舊引用可能不再對應目前內容。</p>';
+  return `<section class="review" id="review-panel" data-meeting="${esc(m.id)}" aria-label="會議檢討">
+    ${state.loading && state.loaded ? '<p class="muted" role="status">正在確認最新的會議內容…</p>' : ''}
+    ${state.error ? `<p class="err" role="alert">${esc(state.error)}</p>` : ''}
+    <div class="review-form">
+      <label for="review-preset">提示詞<select id="review-preset" data-keep onchange="selectReviewPrompt(this.value)" ${state.savingPrompt ? 'disabled' : ''}>
+        ${options.map(([value, label]) => `<option value="${esc(value)}" ${state.selectedPrompt === value ? 'selected' : ''}>${esc(label)}</option>`).join('')}
+      </select></label>
+      ${selected?.sources?.length ? `<ul class="review-sources muted" aria-label="提示詞參考來源">${selected.sources.map(source => `<li>${reviewSourceLink(source)}</li>`).join('')}</ul>` : ''}
+      <label for="review-title">提示詞名稱<input id="review-title" data-keep maxlength="80" value="${esc(state.promptTitle)}" oninput="setReviewField('promptTitle', this.value)" ${state.savingPrompt ? 'disabled' : ''}></label>
+      <label for="review-prompt">給 AI 的提示<textarea id="review-prompt" data-keep maxlength="10000" oninput="setReviewField('prompt', this.value)" ${state.savingPrompt ? 'disabled' : ''}>${esc(state.prompt)}</textarea></label>
+      <div class="review-actions"><button data-keep onclick="saveReviewPrompt()" ${state.savingPrompt || (!state.selectedPrompt.startsWith('custom:') && custom.length >= 20) ? 'disabled' : ''}>${state.savingPrompt ? '儲存中…' : state.selectedPrompt.startsWith('custom:') ? '儲存我的提示詞' : '另存為我的提示詞'}</button>
+        ${!state.selectedPrompt.startsWith('custom:') && custom.length >= 20 ? '<span class="muted">我的提示詞已達 20 個上限</span>' : ''}</div>
+      <p class="muted">只有目前帳號能在此 app 查看對話；對話不隨會議分享。提問會交給目前設定的 AI 模型處理。</p>
+      <label for="review-question">你的問題<textarea id="review-question" data-keep maxlength="10000" placeholder="依會議內容提問或追問…" oninput="setReviewField('question', this.value)" ${state.asking || state.clearing ? 'disabled' : ''}>${esc(state.question)}</textarea></label>
+      <div class="review-actions"><button class="primary" data-keep onclick="askReview()" ${!canEdit || state.asking || state.loading || state.clearing ? 'disabled title="需要編輯權限"' : ''}>${state.asking ? '檢討中…' : '提問'}</button>
+        <span class="muted" role="status">${state.asking ? '正在整理回答…' : ''}</span>
+        ${state.messages.length ? `<button class="ghost" data-keep onclick="clearReviewHistory()" ${!canEdit || state.clearing || state.asking ? 'disabled title="需要編輯權限"' : ''}>${state.clearing ? '清除中…' : '清除我的對話'}</button>` : ''}</div>
+    </div>
+    <div class="review-history" aria-label="本人可見的檢討紀錄">${state.messages.length ? state.messages.map(message => {
+      const stale = state.needsRefresh || (message.contextHash != null && state.contextHash != null && message.contextHash !== state.contextHash);
+      return `<article class="review-message"><div class="muted">${esc(message.model ?? '')}${message.effort ? ` · ${esc(message.effort)}` : ''}${message.createdAt ? ` · ${esc(dt(message.createdAt))}` : ''}</div>
+        <p><b>問題</b></p><div class="review-question">${esc(reviewVisibleQuestion(message.question ?? ''))}</div>
+        ${stale ? staleWarning : ''}<div class="markdown">${reviewAnswerMarkdown(message.answer ?? '', !stale)}</div></article>`;
+    }).join('') : '<p class="muted">還沒有檢討紀錄。</p>'}</div>
+  </section>`;
+}
+async function saveReviewPrompt() {
+  if (!current || !me) return;
+  const id = current.id, userId = me.id, epoch = reviewEpoch, state = reviewState(id);
+  state.promptTitle = $('#review-title')?.value ?? state.promptTitle;
+  state.prompt = $('#review-prompt')?.value ?? state.prompt;
+  if (!state.promptTitle.trim()) { state.error = '請輸入提示詞名稱。'; renderReviewIfCurrent(id); return; }
+  state.savingPrompt = true;
+  state.error = '';
+  renderReviewIfCurrent(id);
+  try {
+    const prompts = await reviewPromptData(userId, epoch);
+    const custom = [...(prompts.custom ?? [])];
+    const ownId = state.selectedPrompt.startsWith('custom:') ? state.selectedPrompt.slice(7) : null;
+    if (!ownId && custom.length >= 20) throw Error('我的提示詞最多可儲存 20 個。');
+    const saved = { id: ownId ?? crypto.randomUUID(), title: state.promptTitle.trim(), prompt: state.prompt };
+    const index = custom.findIndex(p => p.id === saved.id);
+    if (index < 0) custom.push(saved); else custom[index] = saved;
+    const result = await api('/api/review-prompts', json('PUT', { custom }));
+    if (!sameReviewSession(userId, epoch)) return;
+    reviewPromptsCache = { ...prompts, ...result, custom: result.custom ?? custom };
+    reviewPromptsUserId = userId;
+    state.selectedPrompt = `custom:${saved.id}`;
+    state.promptTitle = saved.title;
+    state.prompt = saved.prompt;
+  } catch (error) {
+    if (sameReviewSession(userId, epoch)) state.error = error.message;
+  } finally {
+    if (sameReviewSession(userId, epoch)) { state.savingPrompt = false; renderReviewIfCurrent(id); }
+  }
+}
+async function askReview() {
+  if (!current || !me) return;
+  const id = current.id, userId = me.id, epoch = reviewEpoch, state = reviewState(id);
+  if (rank(current.perm) < rank('edit') || state.asking) return;
+  state.question = $('#review-question')?.value ?? state.question;
+  const draft = state.question, question = draft.trim();
+  if (!question) { state.error = '請輸入問題。'; renderReviewIfCurrent(id); return; }
+  const prompt = state.prompt.trim();
+  // The API stores one question string, so include the selected prompt in each saved turn.
+  const submitted = `${state.promptTitle.trim() ? `提示詞：${state.promptTitle.trim()}\n` : ''}${prompt}${REVIEW_QUESTION_MARKER}${question}`;
+  if (submitted.length > 10000) { state.error = '提示詞與問題合計超過 10,000 字元，請縮短其中一項。'; renderReviewIfCurrent(id); return; }
+  state.asking = true;
+  state.error = '';
+  renderReviewIfCurrent(id);
+  let contextChangedDuringAsk = false;
+  try {
+    await saveNotes();
+    if (!sameReviewSession(userId, epoch)) return;
+    const generation = state.contextGeneration;
+    const result = await api(`/api/meetings/${encodeURIComponent(id)}/review`, json('POST', { question: submitted }));
+    if (!sameReviewSession(userId, epoch)) return;
+    if (generation !== state.contextGeneration) {
+      invalidateReview(id);
+      contextChangedDuringAsk = true;
+      return;
+    }
+    state.messages = Array.isArray(result.messages) ? result.messages : [];
+    state.contextHash = result.contextHash ?? null;
+    state.loaded = true;
+    state.needsRefresh = false;
+    if (state.question === draft) state.question = '';
+  } catch (error) {
+    if (sameReviewSession(userId, epoch)) {
+      if (error.status === 409) invalidateReview(id);
+      state.error = error.message;
+    }
+  } finally {
+    if (sameReviewSession(userId, epoch)) {
+      state.asking = false;
+      if (contextChangedDuringAsk) loadReview(id, true);
+      renderReviewIfCurrent(id);
+    }
+  }
+}
+async function clearReviewHistory() {
+  if (!current || !me) return;
+  const id = current.id, userId = me.id, epoch = reviewEpoch, state = reviewState(id);
+  if (rank(current.perm) < rank('edit') || state.clearing || !window.confirm('清除你在這場會議的所有檢討對話？此動作無法復原。')) return;
+  state.clearing = true;
+  state.error = '';
+  renderReviewIfCurrent(id);
+  try {
+    const result = await api(`/api/meetings/${encodeURIComponent(id)}/review`, { method: 'DELETE' });
+    if (!sameReviewSession(userId, epoch)) return;
+    state.messages = Array.isArray(result.messages) ? result.messages : [];
+    state.contextHash = result.contextHash ?? state.contextHash;
+  } catch (error) {
+    if (sameReviewSession(userId, epoch)) state.error = error.message;
+  } finally {
+    if (sameReviewSession(userId, epoch)) { state.clearing = false; renderReviewIfCurrent(id); }
+  }
+}
+
 function transcriptCopy(m, sectionId = null) {
   const sections = m.sections?.length ? m.sections : [{ id: 'legacy', title: m.originalName || m.title }];
   return sections.flatMap((section, index) => {
@@ -1029,13 +1313,19 @@ function seek(n) {
   return false;
 }
 
-function setTab(t) { tab = t; render(current); }
+function setTab(t) {
+  tab = t;
+  if (t === 'review' && current) invalidateReview(current.id);
+  render(current);
+}
 
 async function openMeeting(id) {
   clearTimeout(pollTimer);
   const same = current?.id === id;
+  const wasBusy = same && BUSY.includes(current.status);
   if (!same) { tab = 'summary'; showRaw = false; activeSeg = 0; selectedSection = null; notesPreview = false; }
   const m = await api(`/api/meetings/${id}`);
+  if (wasBusy && !BUSY.includes(m.status) && tab === 'review') invalidateReview(id);
   current = { ...m, notes: pendingNotes.get(id) ?? m.notes };
   // Polling must not wipe text the user is typing (title, notes, glossary).
   if (!same || !document.activeElement?.matches('main textarea, main input:not([type=checkbox])')) render(current);
@@ -1059,6 +1349,8 @@ function render(m) {
   const keepLive = rec?.state === 'recording' && $('#live');
   m.sections ??= m.file ? [{ id: 'legacy', title: m.originalName, originalName: m.originalName }] : [];
   if (!m.sections.some(s => s.id === selectedSection)) selectedSection = m.sections[0]?.id ?? null;
+  const tabs = m.sections.length ? [['summary', '摘要'], ['notes', '我的筆記'], ['transcript', '逐字稿'], ['review', '會議檢討']] : [['notes', '我的筆記'], ['review', '會議檢討']];
+  if (!tabs.some(([key]) => key === tab)) tab = m.sections.length ? 'summary' : 'notes';
   // Keep the same <audio> element across re-renders so playback isn't interrupted.
   const keepAudio = $('#audio')?.dataset.id === m.id && $('#audio')?.dataset.section === selectedSection && $('#audio');
   const speakerIds = [...new Set(m.segments.map(s => s.speaker))].sort((a, b) => a - b);
@@ -1071,6 +1363,7 @@ function render(m) {
     summary: busy && !m.summary ? `<p class="muted">⏳ ${STATUS[m.status][0]}…</p>`
       : `${staleNote}<div class="summary markdown">${renderSummary(m) || '<p class="muted">尚無摘要</p>'}</div>`,
     notes: notesEditor(m, canEdit),
+    review: tab === 'review' ? reviewPanel(m) : '',
     transcript: !m.segments.length ? `<p class="muted">${busy ? `⏳ ${STATUS[m.status][0]}…` : '沒有逐字稿'}</p>` : `
       <div class="speakers">${speakerIds.map(s => `<label style="color:${COLORS[s % COLORS.length]}">${esc(`Speaker ${s < 26 ? String.fromCharCode(65 + s) : s + 1}`)}
         <input type="text" list="dl-people" value="${esc(m.speakers[s] ?? '')}" placeholder="輸入姓名" onchange="renameSpeaker(${s}, this.value)">${speakerIds.length > 1
@@ -1121,7 +1414,7 @@ function render(m) {
     <div class="ai-block">
       <div class="ai-head">🎙️ 錄音與筆記<span class="muted">${day(m.createdAt)}</span><span class="spacer"></span>
         ${canEdit && action?.retranscribe ? `<button class="ghost" onclick="resummarize(true)" ${busy || uploading || rec?.state === 'recording' ? 'disabled' : ''} title="已轉錄的部分也會重跑，並套用目前的術語">全部重新轉錄</button>` : ''}</div>
-      ${m.sections.length ? '' : bodies.notes}
+
       <div class="ai-start">
         ${canEdit ? `<button id="recBtn" class="${rec?.state === 'recording' ? 'rec' : m.sections.length ? '' : 'primary'}" onclick="toggleRec()" ${busy || uploading || !window.MediaRecorder ? 'disabled' : ''}>${rec?.state === 'recording' ? '■ 停止錄音' : '開始錄音'}</button>
         <span id="recTime" class="muted"></span><span class="spacer"></span>
@@ -1137,19 +1430,21 @@ function render(m) {
           <input aria-label="Section ${i + 1} 名稱" value="${esc(s.title)}" maxlength="200" onchange="changeSection('${s.id}', this.value)" ${busy || uploading || !canEdit ? 'disabled' : ''}>
           ${canEdit ? `<button aria-label="上移 Section ${i + 1}" onclick="changeSection('${s.id}', null, -1)" ${busy || uploading || i === 0 ? 'disabled' : ''}>↑</button>
           <button aria-label="下移 Section ${i + 1}" onclick="changeSection('${s.id}', null, 1)" ${busy || uploading || i === m.sections.length - 1 ? 'disabled' : ''}>↓</button>` : ''}</div>
-        <div class="section-row"><button data-keep aria-pressed="${selectedSection === s.id}" onclick="playSection('${s.id}')">${selectedSection === s.id ? '目前播放' : '播放'}</button>
+        <div class="section-row"><button data-keep aria-pressed="${selectedSection === s.id}" aria-label="播放第 ${i + 1} 部分：${esc(s.title)}" onclick="playSection(${esc(JSON.stringify(s.id))}, true)">${selectedSection === s.id ? '已選取' : '播放'}</button>
           <a href="/api/meetings/${m.id}/audio?section=${s.id}&download" download>${esc(s.originalName)}</a>
           <span class="muted">${s.transcribed ? '已轉錄' : '待轉錄'}</span></div>
       </section>`).join('')}</div>
+      ${m.sections.length ? `<div class="current-section" aria-live="polite">目前選取：第 ${m.sections.findIndex(s => s.id === selectedSection) + 1} 部分 · ${esc(m.sections.find(s => s.id === selectedSection)?.title ?? '')}</div>` : ''}
       <div id="audioSlot"></div>
+      <div id="player-status" class="err" role="status"></div>
       <div class="player" ${m.sections.length ? '' : 'hidden'}>
         <button onclick="skip(-10)" aria-label="倒退 10 秒">↺ 10 秒</button>
         <button onclick="skip(10)" aria-label="快轉 10 秒">10 秒 ↻</button>
         <span class="spacer"></span><span class="muted">速度</span>
         ${[1, 1.2, 1.5, 2].map(r => `<button class="rate ${rate === r ? 'on' : ''}" data-r="${r}" aria-pressed="${rate === r}" onclick="setRate(${r})">${r}×</button>`).join('')}
       </div>
-      ${m.sections.length ? `<div class="tabs" role="tablist">${[['summary', '摘要'], ['notes', '我的筆記'], ['transcript', '逐字稿']].map(([k, t]) =>
-        `<button class="tab ${tab === k ? 'on' : ''}" role="tab" aria-selected="${tab === k}" onclick="setTab('${k}')">${t}</button>`).join('')}</div>` : ''}
+      <div class="tabs" role="tablist">${tabs.map(([k, t]) =>
+        `<button class="tab ${tab === k ? 'on' : ''}" role="tab" aria-selected="${tab === k}" onclick="setTab('${k}')">${t}</button>`).join('')}</div>
       ${m.sections.length && tab === 'summary' ? `<div class="ai-foot">
         <label class="muted">類型 <select id="tpl">${Object.entries(TYPES).map(([v, [t]]) => `<option value="${v}" ${m.template === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
         <label class="muted">語言 <select id="outLang">${[['', '與逐字稿相同'], ['繁體中文（台灣）', '繁體中文'], ['English', 'English'], ['日本語', '日本語'], ['简体中文', '简体中文'], ['한국어', '한국어']]
@@ -1160,7 +1455,7 @@ function render(m) {
         <details ${m.instructions ? 'open' : ''}><summary class="muted">自訂指示</summary>
           <textarea id="instr" placeholder="例如：列出所有提到的數字與截止日">${esc(m.instructions)}</textarea></details>
       </div>` : ''}
-      ${m.sections.length ? bodies[tab] : ''}
+      ${bodies[tab]}
     </div>
     <h2 class="h2">✅ 待辦事項</h2>
     ${staleNote}${m.actions.map((a, i) => todo(m, a, i, markdown(a.text, true), tag([a.owner || '未指定', 'purple']) + (a.team ? teamLink(a.team) : '') + (a.cite ? cites(`[${a.cite}]`) : ''))).join('')
@@ -1250,7 +1545,10 @@ async function createShare(perm) {
 async function patch(body) {
   const id = current.id;
   const m = await api(`/api/meetings/${id}`, json('PATCH', body));
+  const affectsReview = ['notes', 'summary', 'actions', 'tags', 'glossary', 'sections', 'segments'].some(key => Object.hasOwn(body, key));
+  if (affectsReview) invalidateReview(id);
   if (current?.id === id) current = { ...m, notes: pendingNotes.get(id) ?? m.notes };
+  if (affectsReview && current?.id === id && tab === 'review' && !reviewStates.get(id)?.asking) render(current);
   refreshList();
 }
 

@@ -19,6 +19,46 @@ function markdownContext() {
   return context;
 }
 
+function fullUiContext(fetcher = async () => ({ ok: true, status: 200, statusText: 'OK', json: async () => ({}) }), play = () => Promise.resolve(), confirm = () => true) {
+  const dom = new JSDOM(html, { url: 'http://localhost/', runScripts: 'outside-only' });
+  dom.window.matchMedia = () => ({ matches: false, addEventListener() {} });
+  dom.window.fetch = fetcher;
+  dom.window.confirm = confirm;
+  Object.defineProperty(dom.window.crypto, 'randomUUID', { configurable: true, value: () => 'new-review-prompt-id' });
+  dom.window.Element.prototype.scrollIntoView = () => {};
+  const playCalls = [], pauseCalls = [];
+  dom.window.HTMLMediaElement.prototype.play = function () { playCalls.push(this); return play(this); };
+  dom.window.HTMLMediaElement.prototype.pause = function () { pauseCalls.push(this); };
+  dom.window.eval(loadMarkdownRuntime());
+  const context = dom.getInternalVMContext();
+  const run = source => vm.runInContext(source, context);
+  run(script.replace(/boot\(\);\s*$/, ''));
+  for (const name of ['me', 'current', 'tab', 'reviewStates', 'reviewPromptsCache']) {
+    Object.defineProperty(context, name, { configurable: true, get: () => run(name), set: value => {
+      context.__uiValue = value;
+      run(`${name} = __uiValue`);
+    } });
+  }
+  const set = values => {
+    const entries = Object.entries(values);
+    entries.forEach(([, value], index) => { context[`__ui${index}`] = value; });
+    run(entries.map(([name], index) => `${name} = __ui${index}`).join('\n'));
+  };
+  return { dom, context, run, set, playCalls, pauseCalls };
+}
+
+const meetingFixture = (overrides = {}) => ({
+  id: '11111111-1111-4111-8111-111111111111', title: 'Synthetic meeting', createdAt: '2026-11-10T10:00:00+08:00',
+  sections: [], segments: [], summary: '', summaryStale: false, notes: '', status: 'draft', template: 'auto',
+  speakers: {}, actions: [], tags: [], location: '', brief: '', scheduledAt: '', agentId: 'general', lang: 'zh-TW',
+  language: '', glossary: '', outputLang: '', instructions: '', people: [], participants: [], teams: [], usage: [],
+  perm: 'edit', access: 'view', comments: [], speakerHints: [], ...overrides,
+});
+const apiResponse = (body, status = 200) => ({
+  ok: status >= 200 && status < 300, status, statusText: status === 409 ? 'Conflict' : 'OK', json: async () => body,
+});
+const flushUi = () => new Promise(resolve => setImmediate(resolve));
+
 test('UI scripts parse and full Markdown renders with safe links and literal HTML', () => {
   for (const source of scripts) new vm.Script(source);
   const context = markdownContext(), box = context.document.createElement('div');
@@ -85,8 +125,10 @@ test('notes autosave retains edits made while a previous save is in flight', asy
   const saved = [], status = { dataset: { copyKind: 'notes' } };
   const context = vm.createContext({
     current: { id: 'draft', notes: '' },
+    tab: 'notes',
     $: () => status,
     clearTimeout: () => {}, setTimeout: () => 1,
+    invalidateReview: () => {},
     api: async (_url, opts) => {
       const { notes } = JSON.parse(opts.body);
       saved.push(notes);
@@ -298,4 +340,236 @@ test('mobile sidebar starts closed, closes after navigation and preserves deskto
   assert.equal(stored.get('sideCollapsed'), '1', 'opening the mobile overlay must not change desktop preference');
   media.matches = false; changed();
   assert.equal(classes.has('side-collapsed'), true);
+});
+
+test('section play buttons autoplay, seek stays paused, and the shared player follows A-B-A', () => {
+  const { dom, context, playCalls, pauseCalls } = fullUiContext();
+  const meeting = meetingFixture({ status: 'done', sections: [
+    { id: 'a', title: 'First <section>', originalName: 'first.mp3', transcribed: true },
+    { id: 'b', title: 'Second', originalName: 'second.mp3', transcribed: true },
+  ], segments: [{ sectionId: 'b', start: 4, end: 5, speaker: 0, text: '對照音訊', raw: '對照音訊' }] });
+  context.me = { id: 'reviewer', role: 'member', displayName: 'Tester' };
+  context.current = meeting;
+  context.render(meeting);
+  let audio = dom.window.document.querySelector('#audio');
+  assert.equal(audio.getAttribute('src'), `/api/meetings/${meeting.id}/audio?section=a`);
+  assert.equal(dom.window.document.querySelector('.current-section').textContent, '目前選取：第 1 部分 · First <section>');
+  const firstButton = dom.window.document.querySelector('.media-section button[data-keep]');
+  assert.equal(firstButton.textContent, '已選取');
+  assert.equal(firstButton.getAttribute('aria-pressed'), 'true');
+  assert.match(firstButton.getAttribute('aria-label'), /播放第 1 部分：First/);
+  assert.doesNotMatch(firstButton.textContent, /目前播放/);
+  context.setRate(1.5);
+  context.render(meeting);
+  assert.equal(dom.window.document.querySelector('#audio'), audio, 'same-section renders retain the shared audio element');
+  assert.equal(audio.playbackRate, 1.5);
+
+  const buttons = () => [...dom.window.document.querySelectorAll('.media-section button[data-keep]')];
+  vm.runInContext(buttons()[1].getAttribute('onclick'), context);
+  let audioB = dom.window.document.querySelector('#audio');
+  assert.equal(audioB.getAttribute('src'), `/api/meetings/${meeting.id}/audio?section=b`);
+  assert.equal(playCalls.at(-1), audioB);
+  assert.equal(pauseCalls.at(-1), audio);
+  vm.runInContext(buttons()[0].getAttribute('onclick'), context);
+  const audioA = dom.window.document.querySelector('#audio');
+  assert.equal(audioA.getAttribute('src'), `/api/meetings/${meeting.id}/audio?section=a`);
+  assert.equal(playCalls.at(-1), audioA);
+  assert.notEqual(audioA, audioB);
+  const playsBeforeSeek = playCalls.length;
+  assert.equal(context.seek(1), false);
+  assert.equal(dom.window.document.querySelector('#audio').getAttribute('src'), `/api/meetings/${meeting.id}/audio?section=b`);
+  assert.equal(playCalls.length, playsBeforeSeek, 'citation seeking selects and jumps without autoplay');
+  context.playSection('a');
+
+  meeting.perm = 'view';
+  meeting.sections = [meeting.sections[1], { ...meeting.sections[0], title: 'Renamed <section>' }];
+  context.render(meeting);
+  assert.equal(dom.window.document.querySelector('.current-section').textContent, '目前選取：第 2 部分 · Renamed <section>');
+  const readonlyPlay = buttons()[1];
+  assert.equal(readonlyPlay.disabled, false);
+  vm.runInContext(readonlyPlay.getAttribute('onclick'), context);
+  assert.equal(playCalls.at(-1), dom.window.document.querySelector('#audio'), 'readonly users can still play sections');
+});
+
+test('section playback errors are visible and expected AbortError is ignored', async () => {
+  let failure = Error('unsupported codec');
+  const { dom, context, playCalls } = fullUiContext(undefined, () => Promise.reject(failure));
+  const meeting = meetingFixture({ status: 'done', sections: [
+    { id: 'a', title: 'First', originalName: 'first.mp3', transcribed: true },
+    { id: 'b', title: 'Second', originalName: 'second.mp3', transcribed: true },
+  ] });
+  context.me = { id: 'reviewer', role: 'member' };
+  context.current = meeting;
+  context.render(meeting);
+  context.playSection('a', true);
+  await flushUi();
+  assert.match(dom.window.document.querySelector('#player-status').textContent, /unsupported codec/);
+  failure = Object.assign(Error('source changed'), { name: 'AbortError' });
+  context.playSection('b', true);
+  await flushUi();
+  assert.equal(dom.window.document.querySelector('#player-status').textContent, '');
+  assert.equal(playCalls.length, 2);
+});
+
+test('note-only drafts expose private review, save personal prompts, and never load answer images', async () => {
+  const prompts = { presets: [
+    { id: 'question', title: '會議問題', prompt: '請依會議內容回答。', sources: [
+      { title: '參考指南', url: 'https://example.com/guide' }, { title: '不安全連結', url: 'javascript:alert(1)' },
+    ] },
+  ], custom: [{ id: 'existing', title: '既有提示', prompt: '保留這個提示。' }] };
+  const writes = [];
+  const fetcher = async (path, options = {}) => {
+    if (path === '/api/review-prompts' && options.method === 'PUT') {
+      const body = JSON.parse(options.body); writes.push(body.custom);
+      return apiResponse({ presets: prompts.presets, custom: body.custom });
+    }
+    if (path === '/api/review-prompts') return apiResponse(prompts);
+    if (path.endsWith('/review')) return apiResponse({ contextHash: 'same', messages: [{
+      id: 'saved', question: '舊問題', answer: '參考 [1]。\n\n![遠端圖片](https://example.com/private.png)',
+      createdAt: '2026-11-10T10:00:00+08:00', model: 'synthetic-model', effort: 'low', contextHash: 'same',
+    }] });
+    return apiResponse({});
+  };
+  const { dom, context } = fullUiContext(fetcher);
+  const meeting = meetingFixture({ notes: '# 草稿筆記' });
+  context.me = { id: 'reviewer', role: 'member' };
+  context.current = meeting;
+  context.render(meeting);
+  assert.ok(dom.window.document.querySelector('#notes'), 'note-only drafts keep the notes editor available');
+  assert.ok([...dom.window.document.querySelectorAll('[role=tab]')].some(tab => tab.textContent === '會議檢討'));
+  context.setTab('review');
+  await flushUi();
+  await flushUi();
+  assert.match(dom.window.document.querySelector('.review').textContent, /只有目前帳號能在此 app 查看對話；對話不隨會議分享/);
+  assert.equal(dom.window.document.querySelectorAll('.review-sources a').length, 1);
+  assert.ok(dom.window.document.querySelector('.review-message .cite'));
+  const answer = dom.window.document.querySelector('.review-message .markdown');
+  assert.equal(answer.querySelector('img'), null, 'private answers must not trigger remote image requests');
+  assert.match(answer.textContent, /遠端圖片/);
+
+  dom.window.document.querySelector('#review-title').value = '我的回顧';
+  dom.window.document.querySelector('#review-prompt').value = '先區分事實與推測。';
+  await context.saveReviewPrompt();
+  assert.equal(writes[0].length, 2, 'saving a built-in prompt preserves the other personal prompts');
+  const saved = writes[0].find(prompt => prompt.id === 'new-review-prompt-id');
+  assert.deepEqual({ title: saved.title, prompt: saved.prompt }, { title: '我的回顧', prompt: '先區分事實與推測。' });
+  dom.window.document.querySelector('#review-prompt').value = '更新後的個人提示。';
+  await context.saveReviewPrompt();
+  assert.equal(writes[1].length, 2);
+  assert.equal(writes[1].find(prompt => prompt.id === saved.id).prompt, '更新後的個人提示。');
+  const other = context.reviewState('22222222-2222-4222-8222-222222222222');
+  context.reviewState(meeting.id).question = '目前草稿';
+  other.question = '另一場草稿';
+  assert.notEqual(context.reviewState(meeting.id).question, other.question);
+  context.resetReviewData();
+  context.me = { id: 'different-account', role: 'member' };
+  assert.equal(context.reviewStates.size, 0, 'logout/account switch clears private review drafts and history');
+  assert.equal(context.reviewPromptsCache, null);
+});
+
+test('review asks save latest notes first, reject oversized combined input, and retain drafts on 409', async () => {
+  const calls = [], meeting = meetingFixture({ notes: '舊筆記' });
+  const prompts = { presets: [{ id: 'question', title: '一般提問', prompt: '請依目前會議內容回答。' }], custom: [] };
+  const fetcher = async (path, options = {}) => {
+    const method = options.method ?? 'GET';
+    calls.push({ path, method, body: options.body ? JSON.parse(options.body) : null });
+    if (path === '/api/review-prompts') return apiResponse(prompts);
+    if (path.endsWith('/review') && method === 'GET') return apiResponse({ contextHash: 'current', messages: [] });
+    if (path.endsWith('/review') && method === 'POST') return apiResponse({ error: '會議內容已變更，請重試。' }, 409);
+    if (method === 'PATCH') return apiResponse({ ...meeting, notes: JSON.parse(options.body).notes });
+    return apiResponse({});
+  };
+  const { dom, context } = fullUiContext(fetcher);
+  context.me = { id: 'reviewer', role: 'member' };
+  context.current = meeting;
+  context.tab = 'review';
+  context.render(meeting);
+  await flushUi();
+  await flushUi();
+  context.setReviewField('prompt', 'p'.repeat(10000));
+  dom.window.document.querySelector('#review-question').value = '問題';
+  context.setReviewField('question', '問題');
+  await context.askReview();
+  assert.match(dom.window.document.querySelector('[role=alert]').textContent, /提示詞與問題合計超過 10,000 字元/);
+  assert.equal(calls.some(call => call.method === 'POST'), false);
+
+  context.setReviewField('prompt', '依目前會議內容回答。');
+  dom.window.document.querySelector('#review-question').value = '依最新筆記，我下一步要做什麼？';
+  context.setReviewField('question', dom.window.document.querySelector('#review-question').value);
+  vm.runInContext("pendingNotes.set(current.id, '最新筆記')", context);
+  await context.askReview();
+  const patchAt = calls.findIndex(call => call.method === 'PATCH');
+  const postAt = calls.findIndex(call => call.method === 'POST');
+  assert.ok(patchAt >= 0 && patchAt < postAt, 'the newest draft notes are saved before the review request');
+  assert.equal(calls[patchAt].body.notes, '最新筆記');
+  assert.match(calls[postAt].body.question, /依最新筆記，我下一步要做什麼？/);
+  assert.match(dom.window.document.querySelector('#review-question').value, /依最新筆記/);
+  assert.match(dom.window.document.querySelector('[role=alert]').textContent, /會議內容已變更/);
+  assert.equal(context.reviewStates.get(meeting.id).needsRefresh, true);
+});
+
+test('in-flight review GET and POST responses cannot reactivate citations after section reordering', async () => {
+  const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
+  const gets = [deferred(), deferred(), deferred()];
+  const post = deferred();
+  let getCount = 0;
+  const prompts = { presets: [{ id: 'question', title: '一般提問', prompt: '請回答。' }], custom: [] };
+  const oldMessage = { id: 'old', question: '舊問題', answer: '舊引用 [2]', model: 'model', contextHash: 'before' };
+  const fetcher = async (path, options = {}) => {
+    if (path === '/api/review-prompts') return apiResponse(prompts);
+    if (path.endsWith('/review') && options.method === 'POST') return post.promise;
+    if (path.endsWith('/review')) return ++getCount <= gets.length ? gets[getCount - 1].promise : apiResponse({
+      contextHash: 'after', messages: [oldMessage],
+    });
+    return apiResponse({});
+  };
+  const { dom, context } = fullUiContext(fetcher);
+  const meeting = meetingFixture({ status: 'done', sections: [
+    { id: 'a', title: 'First', originalName: 'first.mp3', transcribed: true },
+    { id: 'b', title: 'Second', originalName: 'second.mp3', transcribed: true },
+  ] });
+  context.me = { id: 'reviewer', role: 'member' };
+  context.current = meeting;
+  context.tab = 'review';
+  const state = context.reviewState(meeting.id);
+  state.loaded = true;
+  state.contextHash = 'before';
+  state.messages = [oldMessage];
+  context.invalidateReview(meeting.id);
+  context.render(meeting);
+  meeting.sections = [meeting.sections[1], meeting.sections[0]];
+  context.invalidateReview(meeting.id);
+  context.render(meeting);
+  gets[0].resolve(apiResponse({ contextHash: 'before', messages: [oldMessage] }));
+  await flushUi();
+  await flushUi();
+  assert.equal(getCount, 2, 'an obsolete GET automatically triggers a fresh context read');
+  assert.equal(state.contextHash, 'before', 'the obsolete response does not replace the last known hash');
+  assert.equal(dom.window.document.querySelector('.review-message .cite'), null);
+  gets[1].resolve(apiResponse({ contextHash: 'after', messages: [oldMessage] }));
+  await flushUi();
+  await flushUi();
+  assert.equal(state.contextHash, 'after');
+  assert.equal(dom.window.document.querySelector('.review-message .cite'), null);
+
+  dom.window.document.querySelector('#review-question').value = '新問題';
+  context.setReviewField('question', '新問題');
+  const asking = context.askReview();
+  await flushUi();
+  meeting.sections = [meeting.sections[1], meeting.sections[0]];
+  context.invalidateReview(meeting.id);
+  context.render(meeting);
+  assert.equal(dom.window.document.querySelector('.review-message .cite'), null);
+  post.resolve(apiResponse({ contextHash: 'before', messages: [{ ...oldMessage, id: 'late' }] }));
+  await asking;
+  assert.equal(state.needsRefresh, true);
+  assert.equal(dom.window.document.querySelector('.review-message .cite'), null);
+  gets[2].resolve(apiResponse({ contextHash: 'after', messages: [{ ...oldMessage, id: 'late' }] }));
+  await flushUi();
+  await flushUi();
+  await flushUi();
+  assert.equal(state.contextHash, 'after');
+  assert.equal(dom.window.document.querySelector('.review-message .cite'), null, 'stale citations stay plain until the response hash matches');
+  assert.match(dom.window.document.querySelector('.review-history').textContent, /會議內容已有變更/);
+  assert.equal(getCount, 4, 'the pending GET is discarded and followed by another current-context read');
 });

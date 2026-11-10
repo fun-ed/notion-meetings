@@ -13,9 +13,10 @@ Releases: <https://github.com/fun-ed/notion-meetings/releases> · Changes: [CHAN
 - Microphone recording or upload of audio and video (mp4, mov, m4a, mp3, wav, webm). The original file is kept and can be downloaded.
 - Markdown notes (0.10.0): write notes before adding media. Notes autosave and have a preview for headings, lists, checkboxes, links and code blocks.
 - Add multiple audio or video files to one meeting page. Each file becomes a named section in the order added; move sections up or down, play or download each file, then generate a combined summary. Related meetings can share a page while keeping their transcript sections separate.
-- In development, not yet released: summaries, note previews and comments share CommonMark/GFM rendering, including tables, nested lists, references, images and code blocks. Action item text supports inline Markdown. Raw HTML stays literal and unsafe links are filtered; the parser is served locally and embedded in binaries.
-- In development, not yet released: copy summaries and notes as rendered plain text, or copy all transcript sections or one section with timestamps and speaker names. Transcript copies follow section order and the current raw/tidy view. Read-only users can copy too.
-- UI refinements (unreleased): one processing action follows the meeting state, copy controls sit beside their content, and phone navigation opens over the page without squeezing it.
+- Full CommonMark/GFM rendering (0.11.0): summaries, note previews and comments support tables, nested lists, references, images and code blocks. Action item text supports inline Markdown. Raw HTML stays literal and unsafe links are filtered; the parser is served locally and embedded in binaries.
+- Copy summaries and notes as rendered plain text, or copy all transcript sections or one section with timestamps and speaker names. Transcript copies follow section order and the current raw/tidy view. Read-only users can copy too.
+- UI refinements (0.11.0): one processing action follows the meeting state, copy controls sit beside their content, and phone navigation opens over the page without squeezing it. Section playback identifies the selected file above the shared player.
+- Private meeting review (0.11.0): ask follow-up questions using the meeting notes, summary, transcript, action items and keywords. Editable presets cover retrospectives, work reflection, project milestones, IC growth and gradual rollout plans; save your own prompts. Conversations stay separate from shared meeting content and are processed by the configured AI model. Read access follows meeting permissions; asking and clearing require edit access. [Prompt sources and limitations](docs/research/2026-11-10-meeting-review-prompts.md).
 - Transcription with MAI-Transcribe 2 through OpenRouter (zero data retention), OpenCC conversion to Taiwan wording, and a Claude pass that fixes only glossary terms. Every edit is checked: anything other than a change into a glossary term or an added 【?】 is reverted. Unsure words are marked 【?】 and the raw output is kept.
 - Speaker correction: rename speakers, reassign one segment or a range, merge two speakers, and add participants who did not speak.
 - Learning loop: meeting terms become a team glossary applied to every transcription; Hangul or kana in a Chinese transcript is flagged 【?】; Claude suggests who each speaker is from name cues ("thanks, X"), and you apply a suggestion with one click; corrected meetings can be frozen as a benchmark to track speaker accuracy and CER.
@@ -27,6 +28,8 @@ Releases: <https://github.com/fun-ed/notion-meetings/releases> · Changes: [CHAN
 - Accounts with admin, member and read-only roles, per-meeting access, revocable share links and comments.
 - AI usage per call (tokens, audio seconds, cost, time), light and dark themes, and Taiwan time (GMT+8) throughout.
 - Transcription diagnostics (0.9.0): check the OpenRouter key allowance, ffmpeg and a short ZDR audio request from the admin page or terminal. Failures include actionable messages and request information without exposing credentials or audio.
+
+![Private meeting review with editable prompts](docs/images/review.png)
 
 ![Transcript with speaker range correction (dark theme)](docs/images/transcript-dark.png)
 

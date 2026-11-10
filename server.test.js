@@ -924,3 +924,249 @@ test('pending sections transcribe through transcribeClean in order, isolate spea
     for (const [key, value] of Object.entries(savedEnv)) value === undefined ? delete process.env[key] : process.env[key] = value;
   }
 });
+test('private review prompts and per-user meeting threads stay isolated and grounded', async () => {
+  const member = client(), readonly = client(), anonymous = client();
+  await admin(`${api}/admin/settings`, json('PUT', { registration: true }));
+  const memberSignup = await member(`${api}/auth/register`, json('POST', { username: 'reviewer', password: 'password1', displayName: 'Questioner' }));
+  assert.equal(memberSignup.status, 201);
+  const viewerSignup = await readonly(`${api}/auth/register`, json('POST', { username: 'review-viewer', password: 'password1' }));
+  const viewer = (await viewerSignup.json()).user;
+  await admin(`${api}/admin/users/${viewer.id}`, json('PUT', { role: 'readonly' }));
+  await admin(`${api}/admin/settings`, json('PUT', { registration: false }));
+  const memberProfileResponse = await member(`${api}/me/profile`, json('PUT', { displayName: 'Synthetic Questioner', team: 'Synthetic Team' }));
+  assert.equal(memberProfileResponse.status, 200);
+  const memberProfile = await memberProfileResponse.json();
+
+  const meeting = await (await admin(base, json('POST', { title: 'Synthetic Review Context', notes: 'Synthetic meeting notes.' }))).json();
+  const route = `${base}/${meeting.id}/review`;
+  await admin(`${base}/${meeting.id}`, json('PATCH', { access: 'edit', agentId: 'general' }));
+  const fixture = localMeeting(meeting.id);
+  fixture.agentId = 'general';
+  fixture.status = 'done';
+  fixture.notes = 'Synthetic meeting notes.';
+  fixture.summary = 'Synthetic prior summary [1].';
+  fixture.actions = [{ text: 'Deliver synthetic plan', owner: 'Synthetic Owner', done: false, cite: 2 }];
+  fixture.tags = ['synthetic-tag'];
+  fixture.glossary = 'SyntheticTerm';
+  fixture.sections = [
+    { id: 'section-a', title: 'Alpha Section', originalName: 'alpha.wav', file: '', mime: 'audio/wav', transcribed: true },
+    { id: 'section-b', title: 'Beta Section', originalName: 'beta.wav', file: '', mime: 'audio/wav', transcribed: true },
+  ];
+  fixture.segments = [
+    { sectionId: 'section-a', start: 0, end: 1, speaker: 0, text: 'Synthetic alpha transcript.', raw: 'Synthetic alpha transcript.' },
+    { sectionId: 'section-b', start: 2, end: 3, speaker: 0, text: 'Synthetic beta transcript.', raw: 'Synthetic beta transcript.' },
+  ];
+  fixture.speakers = { 0: 'Speaker A' };
+  saveLocalMeeting(meeting.id, fixture);
+  fs.writeFileSync(path.join(process.env.DATA_DIR, 'knowledge.json'), JSON.stringify({
+    glossary: [{ term: 'SyntheticBackground', meaning: 'Synthetic meaning' }], notes: ['Synthetic background only.'],
+  }));
+
+  const savedEnv = Object.fromEntries(['LLM_PROVIDER', 'OPENAI_BASE_URL', 'OPENAI_API_KEY'].map(k => [k, process.env[k]]));
+  const originalFetch = globalThis.fetch;
+  const cfg = await (await admin(`${api}/ai`)).json();
+  const model = cfg.models.find(x => x.id === 'opus');
+  model.provider = 'openai'; model.model = 'review-model'; model.baseURL = 'http://review-test/v1';
+  model.apiKeyEnv = 'OPENAI_API_KEY'; model.enabled = true; model.default = true; model.maxOutput = 16000;
+  const general = cfg.agents.find(x => x.id === 'general');
+  general.model = 'opus'; general.effort = 'low';
+  assert.equal((await admin(`${api}/admin/ai`, json('PUT', { models: cfg.models, agents: cfg.agents, uses: cfg.uses }))).status, 200);
+  process.env.LLM_PROVIDER = 'openai';
+  process.env.OPENAI_API_KEY = 'synthetic-review-key';
+
+  const endpoint = 'http://review-test/v1/chat/completions', requests = [];
+  let responseMode = 'success', onModelStart = null, releaseModel = null, answers = 0;
+  const holdModel = () => {
+    let started;
+    const wait = new Promise(resolve => { started = resolve; });
+    onModelStart = started; responseMode = 'hold';
+    return wait;
+  };
+  globalThis.fetch = async (url, options = {}) => {
+    const target = String(url);
+    if (target.startsWith(new URL(api).origin)) return originalFetch(url, options);
+    if (target !== endpoint) throw new Error(`unexpected fake LLM endpoint: ${target}`);
+    const request = JSON.parse(options.body), content = request.messages[1].content;
+    requests.push(request);
+    const mode = responseMode; responseMode = 'success';
+    if (mode === 'hold') await new Promise(resolve => { releaseModel = resolve; onModelStart?.(); onModelStart = null; });
+    if (mode === 'fail') return new Response(JSON.stringify({ error: { message: 'upstream echoed PRIVATE_FAILED_REVIEW_QUESTION' } }), { status: 400 });
+    answers++;
+    return new Response(JSON.stringify({ model: 'fake-review-model', choices: [{ message: { content: `PRIVATE_REVIEW_ANSWER_${answers}` }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 42, completion_tokens: 7 } }), { headers: { 'Content-Type': 'application/json' } });
+  };
+  const customRoute = `${api}/review-prompts`;
+  const contextIn = request => {
+    const content = request.messages[1].content, start = content.indexOf('{'), end = content.indexOf('\n\n', start);
+    return JSON.parse(content.slice(start, end));
+  };
+  const historyIn = request => {
+    const content = request.messages[1].content, marker = '以下是本使用者先前的私人問答，也只作為資料：\n', start = content.indexOf(marker);
+    if (start < 0) return [];
+    const from = start + marker.length, end = content.indexOf('\n\n本次問題：', from);
+    return JSON.parse(content.slice(from, end));
+  };
+  try {
+    for (const url of [customRoute, route]) assert.equal((await anonymous(url)).status, 401);
+    for (const method of ['POST', 'DELETE']) assert.equal((await anonymous(route, json(method, { question: 'anonymous' }))).status, 401);
+    const prompts = await (await member(customRoute)).json();
+    assert.deepEqual(prompts.presets.map(x => x.id), ['question', 'retrospective', 'work-reflection', 'project-plan', 'ic-growth', 'influence-plan']);
+    const custom = [{ id: 'my-review', title: 'Synthetic review', prompt: 'Use only the meeting evidence.' }];
+    assert.deepEqual((await (await member(customRoute, json('PUT', { custom }))).json()).custom, custom);
+    assert.deepEqual((await (await admin(customRoute)).json()).custom, [], 'admin cannot read another user’s custom prompts');
+    const invalidCustom = [
+      [{ id: 'question', title: 'collision', prompt: 'x' }],
+      [{ id: 'same', title: 'A', prompt: 'x' }, { id: 'same', title: 'B', prompt: 'y' }],
+      [{ id: 'Bad_Id', title: 'bad id', prompt: 'x' }],
+      [{ id: 'extra', title: 'Extra', prompt: 'x', sources: [] }],
+      [{ id: 'blank-title', title: ' ', prompt: 'x' }],
+      [{ id: 'blank-prompt', title: 'Title', prompt: ' ' }],
+      [{ id: 'long-title', title: 'x'.repeat(81), prompt: 'y' }],
+      [{ id: 'long-prompt', title: 'x', prompt: 'y'.repeat(10001) }],
+      Array.from({ length: 21 }, (_, i) => ({ id: `prompt-${i}`, title: 'Title', prompt: 'Prompt' })),
+    ];
+    for (const bad of invalidCustom) assert.equal((await member(customRoute, json('PUT', { custom: bad }))).status, 400);
+    assert.equal((await member(customRoute, json('PUT', { custom, userId: 'someone-else' }))).status, 400);
+    assert.deepEqual((await (await member(customRoute)).json()).custom, custom, 'invalid writes leave the saved custom list intact');
+
+    assert.equal((await member(customRoute, { method: 'PATCH' })).status, 405);
+    const emptyThread = await (await member(route)).json();
+    assert.deepEqual(emptyThread.messages, []);
+    assert.match(emptyThread.contextHash, /^[0-9a-f]{64}$/);
+    assert.deepEqual((await (await readonly(route)).json()).messages, [], 'readonly can see only its own empty thread');
+    assert.equal((await readonly(route, json('POST', { question: 'blocked' }))).status, 403);
+    assert.equal((await readonly(route, { method: 'DELETE' })).status, 403);
+    const empty = await (await admin(base, json('POST', { title: 'Empty review draft' }))).json();
+    await admin(`${base}/${empty.id}`, json('PATCH', { access: 'edit' }));
+    const requestCount = requests.length;
+    assert.equal((await member(`${base}/${empty.id}/review`, json('POST', { question: 'no context' }))).status, 400);
+    assert.equal(requests.length, requestCount, 'empty meetings never call an LLM');
+    assert.equal((await member(route, json('POST', { question: 'ok', meetingId: empty.id }))).status, 400, 'body fields cannot change scope');
+    assert.equal((await member(route, json('POST', { question: 'x'.repeat(10001) }))).status, 400);
+    const savedWindow = model.contextWindow;
+    model.contextWindow = 100;
+    assert.equal((await admin(`${api}/admin/ai`, json('PUT', { models: cfg.models, agents: cfg.agents, uses: cfg.uses }))).status, 200);
+    const beforePreflight = requests.length;
+    const preflight = await member(route, json('POST', { question: 'Should fail before spending tokens' }));
+    assert.equal(preflight.status, 400, 'context-window preflight errors remain deterministic client errors');
+    assert.equal(requests.length, beforePreflight, 'context-window rejection occurs before the model endpoint');
+    assert.equal((localMeeting(meeting.id).usage ?? []).filter(x => x.kind === 'review').length, 0);
+    model.contextWindow = savedWindow;
+    assert.equal((await admin(`${api}/admin/ai`, json('PUT', { models: cfg.models, agents: cfg.agents, uses: cfg.uses }))).status, 200);
+
+    const firstQuestion = 'PRIVATE_REVIEW_QUESTION';
+    const first = await member(route, json('POST', { question: firstQuestion }));
+    assert.equal(first.status, 200);
+    const firstBody = await first.json(), firstTurn = firstBody.messages[0];
+    assert.deepEqual(Object.keys(firstTurn).sort(), ['answer', 'contextHash', 'createdAt', 'effort', 'id', 'model', 'question']);
+    assert.deepEqual([firstTurn.question, firstTurn.answer, firstTurn.model, firstTurn.effort], [firstQuestion, 'PRIVATE_REVIEW_ANSWER_1', 'review-model', 'low']);
+    assert.match(firstBody.contextHash, /^[0-9a-f]{64}$/);
+    assert.equal(firstTurn.contextHash, firstBody.contextHash);
+    const firstRequest = requests.find(r => r.messages[1].content.includes(JSON.stringify(firstQuestion)));
+    const context = contextIn(firstRequest);
+    assert.deepEqual(context.questioner, { displayName: 'Synthetic Questioner' }, 'only the authenticated display name is supplied as identity metadata');
+    assert.equal(context.title, 'Synthetic Review Context');
+    assert.equal(context.notes, 'Synthetic meeting notes.');
+    assert.equal(context.summary, 'Synthetic prior summary [1].');
+    assert.deepEqual(context.actions[0], { text: 'Deliver synthetic plan', owner: 'Synthetic Owner', cite: 2, done: false });
+    assert.deepEqual(context.tags, ['synthetic-tag']);
+    assert.deepEqual(context.glossary, ['SyntheticTerm']);
+    assert.deepEqual(context.sections.map(s => s.title), ['Alpha Section', 'Beta Section']);
+    assert.match(context.transcript, /\[1\].*Synthetic alpha transcript/);
+    assert.ok(firstRequest.messages[0].content.includes('SyntheticBackground') && firstRequest.messages[0].content.includes('不是本次會議事實'));
+    assert.ok(firstRequest.messages[0].content.includes('Speaker 標籤') && firstRequest.messages[0].content.includes('不要強制使用摘要或待辦事項格式'));
+    assert.deepEqual([firstRequest.model, firstRequest.reasoning_effort, firstRequest.max_completion_tokens], ['review-model', 'low', 8192]);
+
+    const privateProfile = await (await member(`${api}/auth/me`)).json();
+    const privateMeeting = await (await member(`${base}/${meeting.id}`)).json();
+    const privateSearch = await (await member(`${api}/search?q=${encodeURIComponent(firstQuestion)}`)).json();
+    assert.doesNotMatch(JSON.stringify(privateProfile) + JSON.stringify(memberProfile), /PRIVATE_REVIEW_QUESTION|PRIVATE_REVIEW_ANSWER/);
+    assert.doesNotMatch(JSON.stringify(privateMeeting), /PRIVATE_REVIEW_QUESTION|PRIVATE_REVIEW_ANSWER/);
+    assert.deepEqual(privateSearch.results, [], 'search never indexes private review content');
+    assert.equal(localMeeting(meeting.id).review, undefined, 'turns are not written to meeting.json');
+    assert.equal((await (await admin(route)).json()).messages.length, 0, 'owner/admin reads only its own thread');
+
+    model.maxOutput = 2048;
+    assert.equal((await admin(`${api}/admin/ai`, json('PUT', { models: cfg.models, agents: cfg.agents, uses: cfg.uses }))).status, 200);
+    const adminQuestion = 'PRIVATE_ADMIN_QUESTION';
+    assert.equal((await admin(route, json('POST', { question: adminQuestion }))).status, 200);
+    assert.deepEqual((await (await member(route)).json()).messages.map(x => x.question), [firstQuestion]);
+    assert.deepEqual((await (await admin(route)).json()).messages.map(x => x.question), [adminQuestion], 'each user has a separate thread');
+    const secondQuestion = 'Follow up on the previous turn';
+    assert.equal((await member(route, json('POST', { question: secondQuestion }))).status, 200);
+    const secondRequest = requests.find(r => r.messages[1].content.includes(JSON.stringify(secondQuestion)));
+    assert.deepEqual(historyIn(secondRequest).map(x => [x.question, x.answer, x.potentiallyStale]), [[firstQuestion, 'PRIVATE_REVIEW_ANSWER_1', false]]);
+    assert.equal(secondRequest.max_completion_tokens, 2048, 'review cap does not raise a configured lower output limit');
+
+    const startConcurrent = holdModel();
+    const concurrentRequest = member(route, json('POST', { question: 'Concurrent request one' }));
+    await startConcurrent;
+    assert.equal((await member(route, json('POST', { question: 'Concurrent request two' }))).status, 409);
+    assert.equal((await member(route, { method: 'DELETE' })).status, 409, 'clearing cannot race a pending answer');
+    releaseModel(); releaseModel = null;
+    assert.equal((await concurrentRequest).status, 200);
+
+    const startStale = holdModel();
+    const staleRequest = member(route, json('POST', { question: 'Question while sections are reordered' }));
+    await startStale;
+    const currentMeeting = await (await admin(`${base}/${meeting.id}`)).json();
+    const reorder = await admin(`${base}/${meeting.id}`, json('PATCH', { sections: currentMeeting.sections.reverse().map(({ id, title }) => ({ id, title })) }));
+    assert.equal(reorder.status, 200);
+    const changedHash = (await (await member(route)).json()).contextHash;
+    assert.notEqual(changedHash, firstBody.contextHash, 'section order contributes to the context hash');
+    const reorderedHash = changedHash;
+    assert.equal((await admin(`${base}/${meeting.id}`, json('PATCH', { title: 'Synthetic Review Context Renamed' }))).status, 200);
+    const titleHash = (await (await member(route)).json()).contextHash;
+    assert.notEqual(titleHash, reorderedHash, 'meeting title contributes to the review context hash');
+    releaseModel(); releaseModel = null;
+    assert.equal((await staleRequest).status, 409, 'changed meeting context rejects the pending answer without saving it');
+    assert.equal((await (await member(route)).json()).messages.length, 3);
+    const afterReorderQuestion = 'Question after section reorder';
+    assert.equal((await member(route, json('POST', { question: afterReorderQuestion }))).status, 200);
+    const afterReorderRequest = requests.find(r => r.messages[1].content.includes(JSON.stringify(afterReorderQuestion)));
+    assert.ok(historyIn(afterReorderRequest).every(x => x.potentiallyStale), 'prior answers with old hashes are marked potentially stale');
+    assert.ok(afterReorderRequest.messages[0].content.includes('目前會議資料具有優先性'));
+
+    responseMode = 'fail';
+    const failedQuestion = 'PRIVATE_FAILED_REVIEW_QUESTION';
+    const failed = await member(route, json('POST', { question: failedQuestion }));
+    assert.equal(failed.status, 502);
+    assert.doesNotMatch(await failed.text(), /PRIVATE_FAILED_REVIEW_QUESTION|upstream echoed/);
+    const currentMessages = await (await member(route)).json();
+    assert.equal(currentMessages.messages.length, 4, 'failed model calls do not save turns');
+    const failedUsage = localMeeting(meeting.id).usage.filter(x => x.kind === 'review').at(-1);
+    assert.equal(failedUsage.error, 'review request failed');
+    assert.doesNotMatch(JSON.stringify(failedUsage), /PRIVATE_FAILED_REVIEW_QUESTION|upstream echoed/);
+
+    await admin(`${base}/${meeting.id}`, json('PATCH', { access: 'private' }));
+    assert.equal((await member(route)).status, 404, 'private meetings and threads are invisible');
+    assert.equal((await member(`${base}/${meeting.id}`)).status, 404);
+    await admin(`${base}/${meeting.id}`, json('PATCH', { access: 'edit' }));
+    const startRevoked = holdModel();
+    const revokedRequest = member(route, json('POST', { question: 'No result after access is revoked' }));
+    await startRevoked;
+    await admin(`${base}/${meeting.id}`, json('PATCH', { access: 'private' }));
+    releaseModel(); releaseModel = null;
+    assert.equal((await revokedRequest).status, 404, 'revocation during an LLM call returns no private result');
+
+    await admin(`${base}/${meeting.id}`, json('PATCH', { access: 'edit' }));
+    const reviewFile = path.join(process.env.DATA_DIR, 'reviews.json'), reviewData = JSON.parse(fs.readFileSync(reviewFile, 'utf8'));
+    const memberId = (await (await member(`${api}/auth/me`)).json()).user.id;
+    reviewData.users[memberId].meetings[meeting.id] = Array.from({ length: 50 }, (_, i) => ({
+      id: `turn-${i}`, question: `synthetic-${i}`, answer: 'synthetic', createdAt: nowIso(), model: 'review-model', effort: 'low', contextHash: changedHash,
+    }));
+    fs.writeFileSync(reviewFile, JSON.stringify(reviewData));
+    const full = await member(route, json('POST', { question: 'one too many' }));
+    assert.equal(full.status, 409);
+    assert.match((await full.json()).error, /清除歷史紀錄/);
+    assert.equal((await (await member(route)).json()).messages.length, 50, 'the turn cap never silently drops saved messages');
+    assert.equal((await (await member(route, { method: 'DELETE' })).json()).messages.length, 0);
+    assert.deepEqual((await (await admin(route)).json()).messages.map(x => x.question), [adminQuestion], 'clearing affects only the caller’s thread');
+    assert.deepEqual((await (await member(customRoute)).json()).custom, custom, 'clearing a thread retains the caller’s custom prompts');
+    assert.equal(fs.statSync(reviewFile).mode & 0o777, 0o600, 'reviews.json uses the existing private jsonStore mode');
+  } finally {
+    releaseModel?.();
+    globalThis.fetch = originalFetch;
+    for (const [key, value] of Object.entries(savedEnv)) value === undefined ? delete process.env[key] : process.env[key] = value;
+  }
+});

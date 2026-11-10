@@ -48,11 +48,22 @@ server.js  create() / appendSection()
 
 700px 以下的側欄預設收合，展開後覆蓋於主內容之上；選擇頁面或按 Escape 會收起，並處理鍵盤焦點。手機操作不覆寫桌面的收合偏好，跨越斷點時會套用對應狀態。
 
-每個 section 的時間由 00:00 起算，講者編號分開配置。頁面提供逐檔播放與下載；摘要引用會切到對應檔案的時間。調整 section 順序會同步重排逐字稿與既有引用，並提示重新產生摘要。檔名與檔案路徑由伺服器管理，排序 API 只能送既有 section 的 id 與標題。
+每個 section 的時間由 00:00 起算，講者編號分開配置。頁面共用一個播放器，各部分的播放按鈕負責切換並開始播放，播放器上方顯示目前音檔的部分編號與名稱；下載仍依 section 分開。摘要引用會切到對應檔案的時間，保留原本的時間跳轉行為。調整 section 順序會同步重排逐字稿與既有引用，並提示重新產生摘要。檔名與檔案路徑由伺服器管理，排序 API 只能送既有 section 的 id 與標題。
 
 介面路由（hash）：`#` 會議紀錄資料庫、`#new` 新會議、`#search=<查詢>` 搜尋、`#actions` 待辦事項、`#people` 成員與團隊、`#me` 個人設定、`#admin` 管理後台、`#share/<token>` 開啟分享連結、`#<id>` 會議頁；`#<id>:seg-<n>` 會開啟逐字稿並跳到第 n 段，`#<id>:notes` 開啟我的筆記分頁。
 
 讀取會議時（`view()`、`loadAll()`）會用名錄即時補上 `people`、`teams`，以及 `actions[].team/leader`。這些欄位不寫回 `meeting.json`，所以改了名錄，所有舊會議都會跟著更新。
+
+## 私人會議檢討
+
+`review-prompts.js` 提供有公開來源的內建提示詞。前端在「會議檢討」載入內建與登入者自訂的提示詞，使用者可修改問題、另存個人版本並接續追問。沒有媒體的草稿也可用已儲存的筆記提問。回答沿用安全 Markdown 顯示與逐字稿引用跳轉，不變更原本的摘要、筆記或正式待辦。
+
+提問由獨立的 review 路由呼叫既有 `llm()`。模型與 effort 沿用會議的 Agent 選擇，輸入包含目前筆記、摘要、待辦、關鍵字、排序後的逐字稿及本人先前對話。團隊知識只作背景，模型必須區分會議事實、推測與建議。context window 仍由既有檢查處理，不默默裁切會議。
+
+對話與自訂提示詞存在 `DATA_DIR/reviews.json`，按登入者 id 隔離。會議的 view/edit 權限與本人資料範圍都要滿足，管理員的 owner 權限不會讓他讀取其他帳號的檢討。模型呼叫在儲存鎖外進行，同人同場的併發提問回 409，完成後重新確認權限，再以 `jsonStore.mutate()` 追加對話。會議只追加不含私人內容的用量紀錄，錯誤文字亦經過處理，避免上游回顯問題造成外洩。清除只影響本人在該場會議的對話。
+
+每則回答保留生成時的會議內容雜湊。會議內容在模型處理中改變時拒絕保存並提示重新提問；已保存回答若與目前內容版本不同，介面顯示過期提示，引用維持文字而不跳轉，避免 section 重新排序後指向錯誤發言。用量與儲存時間不影響內容版本。
+
 
 ## 學習迴圈（D-020）
 
@@ -131,6 +142,8 @@ summarizing：summarize() 與 suggestSpeakers() 同時執行；建議失敗不�
 | `PUT /api/me/profile`、`/api/me/password` | 個人資料（團隊、Y leader、成員、群組）與密碼 |
 | `GET /api/admin`（含 `usage`：total、byKind、byModel、byDay）；`PUT /api/admin/settings`、`/api/admin/users/:id`；`POST /api/admin/users/:id/reset-password` | 管理後台（admin） |
 | `GET /api/ai`；`PUT /api/admin/ai`；`POST /api/admin/ai/models/:id/test` | 模型與 Agent 設定（非 admin 只看到啟用的 Agent 名稱） |
+| `GET`／`PUT /api/review-prompts` | 讀取內建提示詞與本人 custom 清單；PUT `{custom:[{id,title,prompt}]}` 只修改本人版本，內建提示詞不變 |
+| `GET`／`POST`／`DELETE /api/meetings/:id/review` | 私人 Q&A；GET 回本人 messages，POST `{question}` 依會議與本人對話回答，DELETE 清除本人對話。GET 需 view，POST／DELETE 需 edit，併發提問回 409 |
 | `POST`／`GET /api/meetings/:id/shares`；`POST`／`DELETE /api/shares/:token` | 建立、列出、開啟、撤銷分享連結 |
 | `POST`／`DELETE /api/meetings/:id/comments` | 留言（需 comment 權限；刪除限本人或擁有者） |
 | `GET /api/search?q=` | 搜尋，回傳 `{terms, results[]}`；語法與計分見 D-011 |
@@ -221,6 +234,7 @@ MAI／Azure 的 phraseList 實測 200 個成功、201 個回 400（D-003 補充�
 - 會議清單與搜尋只回傳看得到的會議。
 - PATCH 需要 edit；改 `access` 需要 owner。
 - 留言需要 comment；重新轉錄或摘要需要 edit。
+- 私人檢討讀取需 view；提問與清除需 edit，但資料一律限制為登入者本人。修改會議權限不會把既有私人對話分享出去。
 - 看不到的會議回 404。
 
 介面在權限不足 edit 時停用所有編輯欄位。帶 `data-keep` 的元素維持可用，例如留言框和原始辨識切換。
@@ -231,6 +245,7 @@ MAI／Azure 的 phraseList 實測 200 個成功、201 個回 400（D-003 補充�
 |---|---|
 | `<YYYY-MM-DD>/<id>/meeting.json`、`recording.*` | 會議與錄音原檔；日期是上傳當天的本機日期。`dir(id)` 以 id 查找（快取在記憶體），`migrateLayout()` 在啟動時把舊的 `<id>/` 搬進日期資料夾 |
 | `auth.json` | 註冊開關、使用者（scrypt 雜湊）、分享連結；權限 600 |
+| `reviews.json` | 本人自訂提示詞與依會議保存的私人 Q&A，按登入帳號隔離，權限 600（D-028） |
 | `directory.json` | CSV 名錄，讀取時與使用者個人資料合併（`auth.mergePeople`） |
 | `<YYYY-MM-DD>/<id>/reference.json` | 凍結為 benchmark 時的參考答案（D-020） |
 | `ai.json` | 模型設定、Agent 與各用途的模型（`uses`）；缺少的內建項目在讀取時補上（`ai.withBuiltins`） |
