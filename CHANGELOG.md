@@ -2,7 +2,7 @@
 
 每一版列出新增內容與當時的驗證結果；版本號在 `package.json`，時間一律是台灣時間（GMT+8）。決策理由在 [docs/decisions.md](docs/decisions.md)，評測數據在 [docs/research/](docs/research/)。
 
-## 未發布
+## 0.12.0（2026-11-10，GMT+8）
 
 - 加寬會議內容與 Markdown 閱讀區，增加段落、錄音 section 與檢討回合的間距。重新設計頁籤的選取狀態、焦點與手機排列，支援方向鍵、Home／End 切換。
 - 檢討的提示詞設定、完整問題與回答回合可展開收合，預設展開最新回合；問題也支援 Markdown，維持私人圖片不載入與過期引用防護。
