@@ -459,8 +459,14 @@ async function llm(system, content, opts = {}) {
         log.push({ ...openaiUsage(body, model, effort, kind, Date.now() - started), ...(costUsd && { costUsd }) }); logged = true;
         return text;
       }
-      // Without a per-model endpoint/key, the SDK uses ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY (magpie via npm run start:magpie).
-      const msg = await new Anthropic({ ...(model.baseURL && { baseURL: model.baseURL }), ...(apiKey && { apiKey }) }).beta.messages.stream({
+      // Per-model settings override ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY (npm run start:magpie).
+      // SDK 1.x changes the API version and auth header; preserve the existing proxy contract and tracing opt-out.
+      const anthropicKey = apiKey || process.env.ANTHROPIC_API_KEY?.trim();
+      // Missing configured keys must not trigger the SDK's credential discovery (D-021).
+      if (!anthropicKey && !process.env.ANTHROPIC_AUTH_TOKEN?.trim()) throw fail(400, `${model.label} 沒有設定 API key`);
+      const msg = await new Anthropic({ openTelemetry: false, defaultHeaders: { 'anthropic-version': '2023-06-01',
+        ...(anthropicKey && { 'x-api-key': anthropicKey, Authorization: null }) },
+        ...(model.baseURL && { baseURL: model.baseURL }), ...(anthropicKey && { apiKey: anthropicKey }) }).beta.messages.stream({
         model: model.model,
         max_tokens: model.maxOutput || 64000,
         ...(FALLBACK_MODELS.includes(model.model) && { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' }),

@@ -500,6 +500,69 @@ test('OpenAI-compatible endpoint: write-only key, model list, retry on 503 and e
   } finally { fake.close(); }
 });
 
+test('Anthropic SDK streams through custom endpoints with the existing API version and usage shape', async () => {
+  let seen;
+  const fake = http.createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    seen = { url: req.url, headers: req.headers, body: JSON.parse(Buffer.concat(chunks).toString()) };
+    const events = [
+      ['message_start', { type: 'message_start', message: { id: 'msg_local_test', type: 'message', role: 'assistant', model: 'claude-opus-5-5', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 12, output_tokens: 0 } } }],
+      ['content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }],
+      ['content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'OK' } }],
+      ['content_block_stop', { type: 'content_block_stop', index: 0 }],
+      ['message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 2 } }],
+      ['message_stop', { type: 'message_stop' }],
+    ];
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    res.end(events.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`).join(''));
+  });
+  await new Promise(resolve => fake.listen(0, '127.0.0.1', resolve));
+  const original = await (await admin(`${api}/ai`)).json();
+  const savedEnv = { ...process.env };
+  try {
+    const cfg = structuredClone(original), model = cfg.models.find(m => m.id === ai.BUILTIN_MODELS[0].id);
+    model.baseURL = `http://127.0.0.1:${fake.address().port}`;
+    model.enabled = true;
+    await admin(`${api}/admin/ai`, json('PUT', cfg));
+    await admin(`${api}/admin/ai/keys`, json('PUT', { modelId: model.id, key: 'synthetic-sdk-key' }));
+    const result = await (await admin(`${api}/admin/ai/models/${model.id}/test`, json('POST', {}))).json();
+    assert.equal(result.ok, true, result.error);
+    assert.equal(result.reply, 'OK');
+    assert.deepEqual([result.usage.inputTokens, result.usage.outputTokens], [12, 2]);
+    assert.equal(new URL(seen.url, model.baseURL).pathname, '/v1/messages');
+    assert.equal(seen.headers['anthropic-version'], '2023-06-01');
+    assert.equal(seen.headers['x-api-key'], 'synthetic-sdk-key');
+    assert.equal(seen.headers.authorization, undefined);
+    assert.match(seen.headers['anthropic-beta'], /server-side-fallback-2026-07-01/);
+    assert.equal(seen.headers.traceparent, undefined);
+    assert.equal(seen.body.stream, true);
+    assert.equal(seen.body.fallbacks, 'default');
+    assert.equal(typeof seen.body.output_config.effort, 'string');
+    await admin(`${api}/admin/ai/keys`, json('PUT', { modelId: model.id, key: '' }));
+    for (const name of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN']) {
+      delete process.env.ANTHROPIC_API_KEY;
+      delete process.env.ANTHROPIC_AUTH_TOKEN;
+      process.env[name] = 'synthetic-env-key';
+      const envResult = await (await admin(`${api}/admin/ai/models/${model.id}/test`, json('POST', {}))).json();
+      assert.equal(envResult.ok, true, envResult.error);
+      assert.deepEqual([seen.headers['x-api-key'], seen.headers.authorization], name === 'ANTHROPIC_API_KEY'
+        ? ['synthetic-env-key', undefined] : [undefined, 'Bearer synthetic-env-key']);
+    }
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_AUTH_TOKEN;
+    seen = undefined;
+    const missing = await (await admin(`${api}/admin/ai/models/${model.id}/test`, json('POST', {}))).json();
+    assert.equal(missing.ok, false);
+    assert.match(missing.error, /沒有設定 API key/);
+    assert.equal(seen, undefined, 'missing keys do not send a request');
+  } finally {
+    process.env = savedEnv;
+    await admin(`${api}/admin/ai`, json('PUT', original));
+    fake.close();
+  }
+});
+
 
 test('team knowledge renders glossary and notes, ignores malformed entries (D-024)', () => {
   assert.equal(knowledgeText({}), '');
