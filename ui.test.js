@@ -443,7 +443,7 @@ test('note-only drafts expose private review, save personal prompts, and never l
   assert.match(dom.window.document.querySelector('.review').textContent, /只有目前帳號能在此 app 查看對話；對話不隨會議分享/);
   assert.equal(dom.window.document.querySelectorAll('.review-sources a').length, 1);
   assert.ok(dom.window.document.querySelector('.review-message .cite'));
-  const answer = dom.window.document.querySelector('.review-message .markdown');
+  const answer = dom.window.document.querySelector('.review-message .review-answer');
   assert.equal(answer.querySelector('img'), null, 'private answers must not trigger remote image requests');
   assert.match(answer.textContent, /遠端圖片/);
 
@@ -639,4 +639,133 @@ test('admin sections collapse, preserve open state and keep hidden settings in s
   assert.equal(saved.agents.length, 2);
   assert.equal(dom.window.document.getElementById('admin-models').open, false);
   assert.equal(dom.window.document.getElementById('admin-agents').open, false);
+});
+
+test('review disclosures render Markdown questions safely and retain user expansion choices', async () => {
+  const messages = [
+    { id: 'old', question: '# 長問題\n\n- **步驟一**\n- 步驟二\n\n![圖片](https://example.com/private)', answer: '舊回答 [1]', contextHash: 'same' },
+    { id: 'latest', question: '最新問題', answer: '## 回覆\n\n- **下一步** [1]', contextHash: 'same' },
+  ];
+  const { dom, context } = fullUiContext(async path => apiResponse(path === '/api/review-prompts'
+    ? { presets: [{ id: 'question', title: '一般提問', prompt: '請回答。' }], custom: [] } : { messages, contextHash: 'same' }));
+  const meeting = meetingFixture();
+  context.me = { id: 'reviewer', role: 'member' };
+  context.current = meeting;
+  context.tab = 'review';
+  context.render(meeting);
+  await flushUi(); await flushUi();
+  const turns = [...dom.window.document.querySelectorAll('.review-message > details')];
+  assert.equal(turns[0].open, false);
+  assert.equal(turns[1].open, true);
+  context.toggleReviewDisclosure(turns[1]);
+  assert.equal(Object.hasOwn(context.reviewState(meeting.id).disclosures, 'turn:latest'), false, 'automatic expansion is not a permanent user choice');
+  assert.equal(dom.window.document.querySelector('.review-settings').open, false);
+  assert.equal(dom.window.document.querySelector('.review-question').open, false);
+  assert.equal(dom.window.document.querySelector('.review-question h1').textContent, '長問題');
+  assert.equal(dom.window.document.querySelectorAll('.review-question li').length, 2);
+  assert.equal(dom.window.document.querySelector('.review-question strong').textContent, '步驟一');
+  assert.equal(dom.window.document.querySelector('.review img'), null);
+  assert.ok(dom.window.document.querySelector('.review-answer .cite'));
+  turns[1].open = false;
+  context.toggleReviewDisclosure(turns[1]);
+  const question = dom.window.document.querySelector('.review-question');
+  question.open = true;
+  context.toggleReviewDisclosure(question);
+  context.render(meeting);
+  assert.equal(dom.window.document.querySelectorAll('.review-message > details')[1].open, false);
+  assert.equal(dom.window.document.querySelector('.review-question').open, true);
+});
+
+test('meeting todos group by existing fields and save drag priority without losing completion or citations', async () => {
+  const initial = [{ text: '**確認方案**', owner: 'Alex', done: false, cite: 2 }, { text: '提供回饋', owner: 'Bea', done: true, cite: 3 }, { text: '安排試行', owner: 'Alex', done: false, cite: null }];
+  let stored = meetingFixture({ actions: initial }), writes = 0;
+  const { dom, context } = fullUiContext(async (path, options = {}) => {
+    if (options.method === 'PATCH') { writes++; stored = { ...stored, ...JSON.parse(options.body) }; return apiResponse(stored); }
+    return apiResponse([stored]);
+  });
+  context.me = { id: 'editor', role: 'member' };
+  context.current = stored;
+  context.render(stored);
+  assert.equal(dom.window.document.querySelector('.meeting-todos').open, false);
+  context.setMeetingActionGroup('owner');
+  assert.equal(dom.window.document.querySelectorAll('.meeting-todos > details').length, 2);
+  context.setMeetingActionGroup('status');
+  assert.equal(dom.window.document.querySelectorAll('.meeting-todos > details').length, 2);
+  await context.moveMeetingAction(0, 99);
+  assert.equal(writes, 0);
+  await context.moveMeetingAction(0, 2);
+  assert.deepEqual(stored.actions, [initial[1], initial[2], initial[0]]);
+  assert.deepEqual(Array.from(context.current.actions, a => a.text), [initial[1].text, initial[2].text, initial[0].text]);
+  const transfer = { values: {}, setData(type, value) { this.values[type] = value; }, getData(type) { return this.values[type]; } };
+  context.startMeetingActionDrag({ dataTransfer: transfer, preventDefault() {} }, 0);
+  await context.dropMeetingAction({ dataTransfer: transfer, currentTarget: { dataset: { actionIndex: '1' } }, preventDefault() {} });
+  assert.deepEqual(stored.actions, [initial[2], initial[1], initial[0]]);
+  assert.equal(stored.actions[1].done, true);
+  assert.equal(stored.actions[1].cite, 3);
+  assert.equal(writes, 2);
+  transfer.values['application/x-meeting-action'] = JSON.stringify({ id: 'other', index: 0, userId: 'editor', epoch: 0 });
+  await context.dropMeetingAction({ dataTransfer: transfer, currentTarget: { dataset: { actionIndex: '1' } }, preventDefault() {} });
+  assert.equal(writes, 2, 'a drop from another meeting is ignored');
+  context.current = { ...stored, perm: 'view' };
+  context.render(context.current);
+  assert.equal(dom.window.document.querySelector('.todo-order'), null);
+  assert.ok([...dom.window.document.querySelectorAll('.meeting-todos input')].every(el => el.disabled));
+  assert.equal(dom.window.document.querySelector('[aria-label="待辦分類"]').disabled, false);
+  await context.moveMeetingAction(0, 1);
+  assert.equal(writes, 2, 'readonly priority changes never issue requests');
+});
+
+test('failed meeting todo saves retain the original order and release the controls', async () => {
+  const messages = [], meeting = meetingFixture({ actions: [{ text: 'A', owner: 'Alex' }, { text: 'B', owner: 'Bea' }] });
+  const { dom, context } = fullUiContext(async () => apiResponse({ error: '權限已撤銷' }, 403));
+  dom.window.alert = message => messages.push(message);
+  context.me = { id: 'editor', role: 'member' };
+  context.current = meeting;
+  context.render(meeting);
+  await context.moveMeetingAction(0, 1);
+  assert.deepEqual(Array.from(context.current.actions, a => a.text), ['A', 'B']);
+  assert.match(messages[0], /待辦排序未儲存.*權限已撤銷/);
+  assert.equal(dom.window.document.querySelector('[aria-label="下移待辦 1"]').disabled, false);
+});
+
+test('meeting tabs expose selected panels and support arrow-key navigation', () => {
+  const { dom, context } = fullUiContext();
+  context.me = { id: 'editor', role: 'member' };
+  context.current = meetingFixture({ sections: [{ id: 'a', title: '合成音檔', originalName: 'test.mp3', transcribed: true }] });
+  context.tab = 'summary';
+  context.render(context.current);
+  const list = dom.window.document.querySelector('[role="tablist"]');
+  context.meetingTabKey({ key: 'ArrowRight', target: dom.window.document.querySelector('#meeting-tab-summary'), currentTarget: list, preventDefault() {} });
+  assert.equal(dom.window.document.querySelector('[role="tab"][aria-selected="true"]').textContent, '我的筆記');
+  assert.equal(dom.window.document.activeElement.id, 'meeting-tab-notes');
+  assert.equal(dom.window.document.querySelector('[role="tabpanel"]').getAttribute('aria-labelledby'), 'meeting-tab-notes');
+  assert.equal(dom.window.document.querySelectorAll('[role="tab"][tabindex="0"]').length, 1);
+});
+
+test('pending todo order saves do not overwrite a different meeting or keep its controls locked', async () => {
+  let release, writes = 0;
+  const pending = new Promise(resolve => { release = resolve; });
+  const { dom, context, run } = fullUiContext(async (_path, options = {}) => {
+    assert.equal(options.method, 'PATCH');
+    writes++;
+    return pending;
+  });
+  const actions = [{ text: '先確認', owner: '甲組' }, { text: '再試行', owner: '乙組' }];
+  const first = meetingFixture({ actions }), second = meetingFixture({ id: '22222222-2222-4222-8222-222222222222', actions });
+  context.me = { id: 'editor', role: 'member' };
+  context.current = first;
+  context.render(first);
+  run("pendingNotes.set(current.id, '尚未儲存的筆記')");
+  const saving = context.moveMeetingAction(0, 1);
+  await flushUi();
+  context.current = second;
+  context.render(second);
+  assert.equal(dom.window.document.querySelector('[aria-label="下移待辦 1"]').disabled, true);
+  await context.moveMeetingAction(0, 1);
+  assert.equal(writes, 1);
+  release(apiResponse({ ...first, actions: [actions[1], actions[0]] }));
+  await saving;
+  assert.equal(context.current.id, second.id);
+  assert.equal(dom.window.document.querySelector('[aria-label="下移待辦 1"]').disabled, false);
+  assert.equal(run('pendingNotes.get("11111111-1111-4111-8111-111111111111")'), '尚未儲存的筆記');
 });

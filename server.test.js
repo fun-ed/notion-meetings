@@ -111,6 +111,43 @@ test('parseActions reads summary to-dos, owners, citations, and keeps done state
   assert.deepEqual(parseActions(''), []);
 });
 
+test('summary regeneration retains action priority, refreshes citations and appends new or reassigned tasks', () => {
+  const previous = [
+    { text: '**確認 API**', owner: '甲組', done: true, cite: 2 },
+    { text: '安排試行', owner: '乙組', done: false, cite: 3 },
+    { text: '已移除', owner: '甲組', done: true, cite: 4 },
+    { text: '交接文件', owner: '舊負責人', done: true, cite: 5 },
+  ];
+  const before = JSON.stringify(previous);
+  const md = '- [ ] 新增項目 — 甲組 [10]\n- [ ] 安排試行 — 乙組 [11]\n- [ ] 交接文件 — 新負責人 [12]\n- [ ] **確認 API** — 甲組 [13]';
+  assert.deepEqual(parseActions(md, previous), [
+    { text: '確認 API', owner: '甲組', done: true, cite: 13 },
+    { text: '安排試行', owner: '乙組', done: false, cite: 11 },
+    { text: '新增項目', owner: '甲組', done: false, cite: 10 },
+    { text: '交接文件', owner: '新負責人', done: false, cite: 12 },
+  ]);
+  assert.equal(JSON.stringify(previous), before, 'previous state is never mutated');
+  assert.deepEqual(parseActions(md).map(a => a.text), ['新增項目', '安排試行', '交接文件', '確認 API']);
+  assert.deepEqual(parseActions('', previous), [], 'removed tasks are not resurrected');
+  assert.deepEqual(parseActions(null, null), []);
+});
+
+test('duplicate actions retain separate completion and use matching citations before occurrence order', () => {
+  const previous = [
+    { text: '確認設定', owner: '甲組', done: false, cite: 3 },
+    { text: '確認設定', owner: '甲組', done: true, cite: 1 },
+    { text: '確認設定', owner: '乙組', done: false, cite: 2 },
+  ];
+  const md = '- [ ] 確認設定 — 甲組 [1]\n- [ ] 確認設定 — 乙組 [2]\n- [ ] 確認設定 — 甲組 [3]';
+  assert.deepEqual(parseActions(md, previous).map(a => [a.owner, a.cite, a.done]), [
+    ['甲組', 3, false], ['甲組', 1, true], ['乙組', 2, false],
+  ]);
+  const updated = '- [ ] 確認設定 — 甲組 [10]\n- [ ] 確認設定 — 甲組 [11]\n- [ ] 確認設定 — 乙組 [12]';
+  assert.deepEqual(parseActions(updated, previous).map(a => [a.owner, a.cite, a.done]), [
+    ['甲組', 10, false], ['甲組', 11, true], ['乙組', 12, false],
+  ]);
+});
+
 test('cleanMeta validates time, trims text, dedups and caps tags', () => {
   assert.deepEqual(cleanMeta({ scheduledAt: '2026-10-21T14:30', location: ' 3F ', brief: 'x', tags: '平台, 週會、平台' }),
     { scheduledAt: '2026-10-21T14:30', location: '3F', brief: 'x', tags: ['平台', '週會'] });

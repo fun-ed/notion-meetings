@@ -57,8 +57,8 @@
 
   /* Page */
   main { overflow:auto; }
-  .page { max-width:900px; margin:0 auto; padding:24px 96px 120px; }
-  .page.wide { max-width:1200px; }
+  .page { max-width:1280px; margin:0 auto; padding:32px 48px 120px; }
+  .page.wide { max-width:1440px; }
   .crumb { font-size:14px; color:var(--muted); margin-bottom:28px; }
   .crumb a { text-decoration:none; }
   .crumb a:hover { text-decoration:underline; }
@@ -128,12 +128,14 @@
   .db-foot a { text-decoration:none; }
 
   /* AI meeting notes block */
-  .ai-block { border:1px solid var(--line); border-radius:10px; padding:12px 16px 14px; box-shadow:0 1px 2px rgba(15,15,15,.04); }
+  .ai-block { border:1px solid var(--line); border-radius:12px; padding:24px 28px; margin:28px 0 40px; }
   .ai-head { display:flex; gap:10px; align-items:center; font-weight:600; }
   .ai-head .muted { font-weight:400; }
-  .tabs { display:flex; gap:2px; margin:10px 0 8px; }
-  .tabs .tab { border:0; background:none; color:var(--muted); padding:3px 10px; border-radius:6px; }
-  .tabs .tab.on { background:var(--hover); color:var(--fg); font-weight:600; }
+  .tabs { display:flex; gap:8px; flex-wrap:wrap; margin:28px 0 24px; padding:6px; border:1px solid var(--line); border-radius:12px; background:var(--side); }
+  .tabs .tab { flex:1; min-width:100px; min-height:44px; border:1px solid transparent; background:transparent; color:var(--muted); padding:10px 16px; border-radius:8px; font-weight:600; }
+  .tabs .tab:hover { background:var(--hover); color:var(--fg); }
+  .tabs .tab.on { background:var(--active-bg); color:var(--accent); border-color:var(--accent); box-shadow:inset 0 -3px 0 var(--accent); }
+  .tabs .tab:focus-visible, .meeting-todos button:focus-visible, .meeting-todos select:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
   .ai-foot { display:flex; gap:10px; align-items:center; flex-wrap:wrap; border-bottom:1px solid var(--line); margin-bottom:12px; padding-bottom:10px; }
   .ai-foot details { width:100%; }
   .ai-foot textarea, .notes { width:100%; border:1px solid var(--line); border-radius:6px; padding:6px 8px; min-height:70px; }
@@ -160,16 +162,39 @@
   @keyframes seg-glow { from { box-shadow:0 0 0 5px rgba(35,131,226,.35); } to { box-shadow:0 0 0 1px var(--active-ring); } }
   .player { display:flex; gap:6px; align-items:center; margin-top:6px; }
   .current-section { margin:8px 0 0; font-size:14px; overflow-wrap:anywhere; }
-  .review { margin:12px 0; }
-  .review-form { display:grid; gap:8px; }
-  .review-form label { display:grid; gap:3px; color:var(--muted); font-size:14px; }
-  .review-form select, .review-form input, .review-form textarea { width:100%; min-width:0; border:1px solid var(--line); border-radius:6px; padding:6px 8px; color:var(--fg); }
-  .review-form textarea { min-height:110px; resize:vertical; }
-  .review-question { white-space:pre-wrap; overflow-wrap:anywhere; }
-  .review-message { border-top:1px solid var(--line); padding:10px 0; }
-  .review-actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
-  .review-sources { margin:2px 0; }
+  .review { margin:24px 0; }
+  .review-form { display:grid; gap:20px; margin-bottom:32px; }
+  .review-form label { display:grid; gap:8px; color:var(--muted); font-size:14px; }
+  .review-form select, .review-form input, .review-form textarea { width:100%; min-width:0; border:1px solid var(--line); border-radius:8px; padding:10px 12px; color:var(--fg); }
+  .review-form textarea { min-height:140px; resize:vertical; line-height:1.8; }
+  .review-settings { border:1px solid var(--line); border-radius:10px; padding:12px 16px; background:var(--side); }
+  .review-settings[open] > summary { margin-bottom:20px; }
+  .review-settings > label, .review-settings > .review-actions { margin-top:16px; }
+  .review-message { border:1px solid var(--line); border-radius:12px; margin:24px 0; padding:8px 20px; }
+  .review-message > details > summary { gap:12px; padding:16px 0; }
+  .review-turn-title { flex:1; min-width:0; overflow-wrap:anywhere; font-weight:600; }
+  .review-turn-body { padding:8px 0 20px; }
+  .review-question { border:1px solid var(--line); border-radius:8px; background:var(--side); padding:8px 16px; margin-bottom:24px; }
+  .review-question .markdown { padding:8px 0 16px; }
+  .review-answer { line-height:1.85; }
+  .review-answer > :first-child { margin-top:0; }
+  .review .markdown p, .review .markdown ul, .review .markdown ol { margin:14px 0; }
+  .review .markdown li + li { margin-top:8px; }
+  .review-actions { display:flex; align-items:center; flex-wrap:wrap; gap:12px; }
+  .review summary:focus-visible { outline:2px solid var(--accent); outline-offset:4px; }
+  .review-sources { margin:12px 0; }
   .review-sources li { overflow-wrap:anywhere; }
+  .meeting-todos { margin:40px 0; padding:16px 20px; border:1px solid var(--line); border-radius:12px; }
+  .meeting-todos > summary { font-size:20px; font-weight:600; }
+  .meeting-todos-tools { display:flex; gap:16px; align-items:center; flex-wrap:wrap; margin:20px 0; }
+  .meeting-todo { display:flex; gap:12px; align-items:flex-start; border:1px solid var(--line); border-radius:8px; padding:16px; margin:12px 0; background:var(--bg); }
+  .meeting-todo .todo { flex:1; min-width:0; flex-wrap:wrap; padding:0; }
+  .meeting-todo .todo > span { min-width:0; overflow-wrap:anywhere; }
+  .todo-order button[draggable=true] { cursor:grab; }
+  .meeting-todo.drop-target { border-color:var(--accent); background:var(--active-bg); }
+  .todo-order { display:flex; gap:4px; flex-shrink:0; }
+  .todo-order button { min-width:36px; min-height:36px; }
+  .todo-priority { color:var(--muted); font-size:13px; min-width:24px; }
 
   .player button { font-size:13px; padding:1px 8px; }
   .player .rate.on { background:var(--fg); border-color:var(--fg); color:var(--bg); }
@@ -206,17 +231,19 @@
   table.usage tr.err td { color:var(--red); }
   .share-row input { flex:1; min-width:280px; border:1px solid var(--line); border-radius:6px; padding:2px 6px; font-size:12px; }
   .notes-tools, .section-row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-  .media-section { padding:10px 0; border-bottom:1px solid var(--line); }
-  .section-row + .section-row { margin-top:6px; font-size:13px; }
+  .media-section { padding:20px 0; margin:12px 0; border-bottom:1px solid var(--line); }
+  .section-row + .section-row { margin-top:12px; font-size:13px; }
   .section-row input { flex:1; min-width:100px; border:1px solid var(--line); border-radius:4px; padding:3px 6px; }
   .section-row a { overflow-wrap:anywhere; min-width:0; }
   .section-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; margin:20px 0 8px; font-size:17px; border-bottom:1px solid var(--line); }
   .section-heading span { min-width:0; overflow-wrap:anywhere; }
   .section-heading button { flex-shrink:0; font-size:13px; font-weight:400; }
   #msg:empty { display:none; }
-  .markdown { overflow-wrap:anywhere; }
-  .markdown h1 { font-size:26px; } .markdown h2 { font-size:22px; } .markdown h3 { font-size:18px; }
-  .markdown p { margin:8px 0; white-space:pre-wrap; }
+  .markdown { overflow-wrap:anywhere; font-size:16px; line-height:1.85; }
+  .markdown h1 { font-size:26px; } .markdown h2 { font-size:22px; margin:32px 0 12px; } .markdown h3 { font-size:18px; margin:24px 0 10px; }
+  .markdown p { margin:12px 0; white-space:pre-wrap; }
+  .markdown ul, .markdown ol { margin:12px 0; }
+  .markdown li + li { margin-top:6px; }
   .markdown pre { overflow:auto; background:var(--code-bg); padding:12px; border-radius:4px; }
   .markdown blockquote { margin:8px 0; padding-left:12px; border-left:3px solid var(--line); color:var(--muted); }
   .markdown table { border-collapse:collapse; display:block; max-width:100%; overflow-x:auto; margin:12px 0; }
@@ -239,6 +266,18 @@
     .page { padding:20px 20px 80px; } .prop { grid-template-columns:100px minmax(0, 1fr); }
     .ai-head, .player { flex-wrap:wrap; } .ai-head .spacer, .player .spacer { display:none; }
     .ai-head .muted, .ai-head button, .player button, .player .muted { white-space:nowrap; flex-shrink:0; }
+    .ai-block { padding:20px 16px; }
+    .tabs { gap:6px; margin:24px 0; }
+    .tabs .tab { flex-basis:calc(50% - 6px); min-width:0; padding:10px 8px; }
+    .review-message { padding:8px 14px; }
+    .meeting-todos { padding:12px; }
+    .meeting-todo { gap:8px; padding:12px; flex-wrap:wrap; }
+    .todo-order { margin-left:auto; }
+    .review-message > details > summary { display:grid; grid-template-columns:12px minmax(0, 1fr); gap:8px; }
+    .review-turn-title { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+    .review-message > details > summary > .muted { grid-column:2; font-size:12px; }
+    .meeting-todo .todo { flex-basis:calc(100% - 32px); }
+    .todo-order button { min-width:44px; min-height:44px; }
   }
 </style>
 </head>
@@ -731,13 +770,89 @@ function toggleGroup(el) { openGroups[el.open ? 'add' : 'delete'](el.dataset.k);
 function toggleAll(open) { document.querySelectorAll('#act-list details').forEach(d => { d.open = open; }); }
 
 async function setDone(id, i, done) {
+  if (meetingActionSaving) { if (current) render(current); return; }
   const m = current?.id === id ? current : meetings.find(x => x.id === id);
   const updated = await api(`/api/meetings/${id}`, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ actions: m.actions.map((a, k) => k === i ? { ...a, done } : a) }),
   });
+  invalidateReview(id);
   if (current?.id === id) { current = updated; render(current); refreshList(); }
   else if ($('#act-list')) { await refreshList(); renderActions(); }
+}
+
+let meetingActionSaving = false;
+const meetingActionGroups = new Map();
+const meetingActionCategoryOpen = new Map();
+function setMeetingActionGroup(value) {
+  if (!current || !['none', 'owner', 'status'].includes(value)) return;
+  meetingActionGroups.set(current.id, value);
+  render(current);
+}
+function meetingActions(m) {
+  const mode = meetingActionGroups.get(m.id) ?? 'none', canEdit = rank(m.perm) >= rank('edit');
+  const groups = new Map();
+  m.actions.forEach((a, i) => {
+    const key = mode === 'owner' ? a.owner || '未指定' : mode === 'status' ? a.done ? '已完成' : '未完成' : '';
+    groups.set(key, [...(groups.get(key) ?? []), { a, i }]);
+  });
+  const rows = entries => entries.map(({ a, i }) => `<div class="meeting-todo" data-action-index="${i}" ondragover="meetingActionDragOver(event)" ondragleave="this.classList.remove('drop-target')" ondrop="dropMeetingAction(event)">
+    <span class="todo-priority" title="優先順序">${i + 1}</span>
+    ${todo(m, a, i, markdown(a.text, true), tag([a.owner || '未指定', 'purple']) + (a.team ? teamLink(a.team) : '') + (a.cite ? cites(`[${a.cite}]`) : ''))}
+    ${canEdit ? `<div class="todo-order"><button class="ghost" draggable="${!meetingActionSaving}" aria-label="拖曳排序待辦 ${i + 1}" title="拖曳調整優先順序" ondragstart="startMeetingActionDrag(event, ${i})" ondragend="clearMeetingActionDrag()" ${meetingActionSaving ? 'disabled' : ''}>⠿</button>
+      <button aria-label="上移待辦 ${i + 1}" onclick="moveMeetingAction(${i}, ${i - 1})" ${meetingActionSaving || i === 0 ? 'disabled' : ''}>↑</button>
+      <button aria-label="下移待辦 ${i + 1}" onclick="moveMeetingAction(${i}, ${i + 1})" ${meetingActionSaving || i === m.actions.length - 1 ? 'disabled' : ''}>↓</button></div>` : ''}</div>`).join('');
+  return `<details class="group meeting-todos" data-k="${esc(`meeting-todos:${m.id}`)}" ${openGroups.has(`meeting-todos:${m.id}`) ? 'open' : ''} ontoggle="toggleGroup(this)">
+    <summary>待辦事項 <span class="count">${m.actions.filter(a => !a.done).length} 未完成／${m.actions.length} 項</span></summary>
+    <div class="meeting-todos-tools"><label>分類 <select data-keep aria-label="待辦分類" onchange="setMeetingActionGroup(this.value)">${[['none', '優先順序'], ['owner', '依負責人'], ['status', '依完成狀態']].map(([key, label]) => `<option value="${key}" ${mode === key ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
+      <span class="muted" role="status">${meetingActionSaving ? '正在儲存優先順序…' : canEdit ? '拖曳把手或使用上下箭頭調整優先順序，順序會自動儲存。' : '檢視待辦；調整順序需要編輯權限。'}</span></div>
+    ${[...groups].map(([key, entries]) => {
+      const category = `meeting-todos:${m.id}:${mode}:${key}`;
+      return mode === 'none' ? rows(entries) : `<details class="group" data-action-category="${esc(category)}" ${meetingActionCategoryOpen.get(category) ?? true ? 'open' : ''} ontoggle="meetingActionCategoryOpen.set(this.dataset.actionCategory, this.open)"><summary>${esc(key)} <span class="count">${entries.length}</span></summary>${rows(entries)}</details>`;
+    }).join('') || '<p class="muted">摘要產生後，待辦事項會出現在這裡。</p>'}
+    <p class="muted">更新摘要後，相同事項與負責人會保留順序及完成狀態，新增事項接在最後。<a href="#actions">查看所有會議的待辦</a></p></details>`;
+}
+async function moveMeetingAction(from, to) {
+  const m = current, userId = me?.id, epoch = reviewEpoch;
+  if (!m || !me || rank(m.perm) < rank('edit') || meetingActionSaving || !Number.isInteger(from) || !Number.isInteger(to)
+    || from < 0 || to < 0 || from >= m.actions.length || to >= m.actions.length || from === to) return;
+  const actions = [...m.actions];
+  actions.splice(to, 0, actions.splice(from, 1)[0]);
+  meetingActionSaving = true;
+  render(m);
+  try {
+    const updated = await api(`/api/meetings/${m.id}`, json('PATCH', { actions }));
+    if (sameReviewSession(userId, epoch) && current?.id === m.id) {
+      current = { ...updated, notes: pendingNotes.get(m.id) ?? updated.notes };
+      invalidateReview(m.id);
+      refreshList();
+    }
+  } catch (error) {
+    if (sameReviewSession(userId, epoch)) alert(`待辦排序未儲存：${error.message}`);
+  } finally {
+    meetingActionSaving = false;
+    if (sameReviewSession(userId, epoch) && current && $('#meeting-panel')) render(current);
+  }
+}
+function startMeetingActionDrag(event, index) {
+  if (!current || !me || rank(current.perm) < rank('edit') || meetingActionSaving) { event.preventDefault(); return; }
+  event.dataTransfer.setData('application/x-meeting-action', JSON.stringify({ id: current.id, index, userId: me?.id, epoch: reviewEpoch }));
+  event.dataTransfer.effectAllowed = 'move';
+}
+function meetingActionDragOver(event) {
+  if (!current || rank(current.perm) < rank('edit') || meetingActionSaving || !event.dataTransfer.types.includes('application/x-meeting-action')) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'move';
+  event.currentTarget.classList.add('drop-target');
+}
+function clearMeetingActionDrag() { document.querySelectorAll('.meeting-todo.drop-target').forEach(el => el.classList.remove('drop-target')); }
+async function dropMeetingAction(event) {
+  event.preventDefault();
+  clearMeetingActionDrag();
+  let drag;
+  try { drag = JSON.parse(event.dataTransfer.getData('application/x-meeting-action')); } catch { return; }
+  if (drag?.id !== current?.id || !sameReviewSession(drag?.userId, drag?.epoch)) return;
+  await moveMeetingAction(drag.index, Number(event.currentTarget.dataset.actionIndex));
 }
 
 // ---- 成員與團隊 ----
@@ -1019,8 +1134,16 @@ function renderSummary(m) {
 const REVIEW_QUESTION_MARKER = '\n\n【使用者問題】\n';
 function reviewState(id) {
   if (!reviewStates.has(id)) reviewStates.set(id, { messages: [], question: '', selectedPrompt: '', promptTitle: '', prompt: '',
-    loading: false, loaded: false, needsRefresh: false, contextGeneration: 0, asking: false, savingPrompt: false, clearing: false, error: '', contextHash: null });
+    loading: false, loaded: false, needsRefresh: false, contextGeneration: 0, asking: false, savingPrompt: false, clearing: false, error: '', contextHash: null, disclosures: {} });
   return reviewStates.get(id);
+}
+function toggleReviewDisclosure(el) {
+  const id = el.closest('.review')?.dataset.meeting;
+  if (!id || !el.isConnected) return;
+  const state = reviewState(id), key = el.dataset.disclosure;
+  const defaultOpen = key === `turn:${state.messages.at(-1)?.id ?? state.messages.length - 1}`;
+  if (!Object.hasOwn(state.disclosures, key) && el.open === defaultOpen) return;
+  state.disclosures[key] = el.open;
 }
 function invalidateReview(id) {
   const state = reviewStates.get(id);
@@ -1150,6 +1273,8 @@ function reviewPanel(m) {
     ${state.loading && state.loaded ? '<p class="muted" role="status">正在確認最新的會議內容…</p>' : ''}
     ${state.error ? `<p class="err" role="alert">${esc(state.error)}</p>` : ''}
     <div class="review-form">
+      <details class="review-settings" data-disclosure="prompt" ${state.disclosures.prompt ? 'open' : ''} ontoggle="toggleReviewDisclosure(this)">
+        <summary>提示詞設定：${esc(state.promptTitle || '自由提問')}</summary>
       <label for="review-preset">提示詞<select id="review-preset" data-keep onchange="selectReviewPrompt(this.value)" ${state.savingPrompt ? 'disabled' : ''}>
         ${options.map(([value, label]) => `<option value="${esc(value)}" ${state.selectedPrompt === value ? 'selected' : ''}>${esc(label)}</option>`).join('')}
       </select></label>
@@ -1158,17 +1283,27 @@ function reviewPanel(m) {
       <label for="review-prompt">給 AI 的提示<textarea id="review-prompt" data-keep maxlength="10000" oninput="setReviewField('prompt', this.value)" ${state.savingPrompt ? 'disabled' : ''}>${esc(state.prompt)}</textarea></label>
       <div class="review-actions"><button data-keep onclick="saveReviewPrompt()" ${state.savingPrompt || (!state.selectedPrompt.startsWith('custom:') && custom.length >= 20) ? 'disabled' : ''}>${state.savingPrompt ? '儲存中…' : state.selectedPrompt.startsWith('custom:') ? '儲存我的提示詞' : '另存為我的提示詞'}</button>
         ${!state.selectedPrompt.startsWith('custom:') && custom.length >= 20 ? '<span class="muted">我的提示詞已達 20 個上限</span>' : ''}</div>
+      </details>
       <p class="muted">只有目前帳號能在此 app 查看對話；對話不隨會議分享。提問會交給目前設定的 AI 模型處理。</p>
       <label for="review-question">你的問題<textarea id="review-question" data-keep maxlength="10000" placeholder="依會議內容提問或追問…" oninput="setReviewField('question', this.value)" ${state.asking || state.clearing ? 'disabled' : ''}>${esc(state.question)}</textarea></label>
       <div class="review-actions"><button class="primary" data-keep onclick="askReview()" ${!canReview || state.asking || state.loading || state.clearing ? 'disabled title="需要檢視權限"' : ''}>${state.asking ? '檢討中…' : '提問'}</button>
         <span class="muted" role="status">${state.asking ? '正在整理回答…' : ''}</span>
         ${state.messages.length ? `<button class="ghost" data-keep onclick="clearReviewHistory()" ${!canReview || state.clearing || state.asking ? 'disabled title="需要檢視權限"' : ''}>${state.clearing ? '清除中…' : '清除我的對話'}</button>` : ''}</div>
     </div>
-    <div class="review-history" aria-label="本人可見的檢討紀錄">${state.messages.length ? state.messages.map(message => {
+    <div class="review-history" aria-label="本人可見的檢討紀錄">${state.messages.length ? state.messages.map((message, index) => {
       const stale = state.needsRefresh || (message.contextHash != null && state.contextHash != null && message.contextHash !== state.contextHash);
-      return `<article class="review-message"><div class="muted">${esc(message.model ?? '')}${message.effort ? ` · ${esc(message.effort)}` : ''}${message.createdAt ? ` · ${esc(dt(message.createdAt))}` : ''}</div>
-        <p><b>問題</b></p><div class="review-question">${esc(reviewVisibleQuestion(message.question ?? ''))}</div>
-        ${stale ? staleWarning : ''}<div class="markdown">${reviewAnswerMarkdown(message.answer ?? '', !stale)}</div></article>`;
+      const question = reviewVisibleQuestion(message.question ?? ''), key = `turn:${message.id ?? index}`;
+      const questionHTML = reviewAnswerMarkdown(question, false), previewBox = document.createElement('div');
+      previewBox.innerHTML = questionHTML;
+      const preview = previewBox.textContent.replace(/\s+/g, ' ').trim();
+      const expanded = state.disclosures[key] ?? index === state.messages.length - 1;
+      return `<article class="review-message"><details class="group" data-disclosure="${esc(key)}" ${expanded ? 'open' : ''} ontoggle="toggleReviewDisclosure(this)">
+        <summary><span class="review-turn-title">第 ${index + 1} 回合：${esc(preview.slice(0, 90))}${preview.length > 90 ? '…' : ''}</span>
+          <span class="muted">${message.createdAt ? esc(dt(message.createdAt)) : ''}</span></summary>
+        <div class="review-turn-body"><details class="group review-question" data-disclosure="${esc(key)}:question" ${state.disclosures[`${key}:question`] ? 'open' : ''} ontoggle="toggleReviewDisclosure(this)">
+          <summary>查看完整問題</summary><div class="markdown">${questionHTML}</div></details>
+        <p class="muted">${esc(message.model ?? '')}${message.effort ? ` · ${esc(message.effort)}` : ''}</p>
+        ${stale ? staleWarning : ''}<div class="markdown review-answer">${reviewAnswerMarkdown(message.answer ?? '', !stale)}</div></div></details></article>`;
     }).join('') : '<p class="muted">還沒有檢討紀錄。</p>'}</div>
   </section>`;
 }
@@ -1322,6 +1457,17 @@ function setTab(t) {
   if (t === 'review' && current) invalidateReview(current.id);
   render(current);
 }
+function meetingTabKey(event) {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+  const buttons = [...event.currentTarget.querySelectorAll('[role="tab"]')], index = buttons.indexOf(event.target);
+  if (index < 0) return;
+  event.preventDefault();
+  const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
+    : (index + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length;
+  const key = buttons[next].dataset.tab;
+  setTab(key);
+  document.getElementById(`meeting-tab-${key}`)?.focus();
+}
 
 async function openMeeting(id) {
   clearTimeout(pollTimer);
@@ -1447,8 +1593,8 @@ function render(m) {
         <span class="spacer"></span><span class="muted">速度</span>
         ${[1, 1.2, 1.5, 2].map(r => `<button class="rate ${rate === r ? 'on' : ''}" data-r="${r}" aria-pressed="${rate === r}" onclick="setRate(${r})">${r}×</button>`).join('')}
       </div>
-      <div class="tabs" role="tablist">${tabs.map(([k, t]) =>
-        `<button class="tab ${tab === k ? 'on' : ''}" role="tab" aria-selected="${tab === k}" onclick="setTab('${k}')">${t}</button>`).join('')}</div>
+      <div class="tabs" role="tablist" aria-label="會議內容" onkeydown="meetingTabKey(event)">${tabs.map(([k, t]) =>
+        `<button id="meeting-tab-${k}" data-tab="${k}" class="tab ${tab === k ? 'on' : ''}" role="tab" aria-selected="${tab === k}" aria-controls="meeting-panel" tabindex="${tab === k ? 0 : -1}" onclick="setTab('${k}')">${t}</button>`).join('')}</div>
       ${m.sections.length && tab === 'summary' ? `<div class="ai-foot">
         <label class="muted">類型 <select id="tpl">${Object.entries(TYPES).map(([v, [t]]) => `<option value="${v}" ${m.template === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
         <label class="muted">語言 <select id="outLang">${[['', '與逐字稿相同'], ['繁體中文（台灣）', '繁體中文'], ['English', 'English'], ['日本語', '日本語'], ['简体中文', '简体中文'], ['한국어', '한국어']]
@@ -1459,12 +1605,9 @@ function render(m) {
         <details ${m.instructions ? 'open' : ''}><summary class="muted">自訂指示</summary>
           <textarea id="instr" placeholder="例如：列出所有提到的數字與截止日">${esc(m.instructions)}</textarea></details>
       </div>` : ''}
-      ${bodies[tab]}
+      <div id="meeting-panel" role="tabpanel" aria-labelledby="meeting-tab-${tab}">${bodies[tab]}</div>
     </div>
-    <h2 class="h2">✅ 待辦事項</h2>
-    ${staleNote}${m.actions.map((a, i) => todo(m, a, i, markdown(a.text, true), tag([a.owner || '未指定', 'purple']) + (a.team ? teamLink(a.team) : '') + (a.cite ? cites(`[${a.cite}]`) : ''))).join('')
-      || '<p class="muted">摘要產生後，待辦事項會出現在這裡。</p>'}
-    <p class="muted"><a href="#actions">查看所有會議的待辦 →</a></p>
+    ${staleNote}${meetingActions(m)}
     <h2 class="h2">💬 留言</h2>
     ${(m.comments ?? []).map(c => `<div class="comment"><b>${esc(c.name)}</b> <span class="muted">${dt(c.createdAt)}
       ${c.seg ? `· <a href="#${m.id}:seg-${c.seg}" onclick="return seek(${c.seg})">逐字稿第 ${c.seg} 段</a>` : ''}</span>
@@ -1479,6 +1622,7 @@ function render(m) {
     document.querySelectorAll('main input, main textarea, main select').forEach(el => { if (!el.matches('[data-keep]')) el.disabled = true; });
     document.querySelectorAll('main .tag-x, main .tag-add, .ai-head .ghost, .ai-foot button:not([data-keep]), .speakers select').forEach(el => { el.hidden = true; });
   }
+  if (meetingActionSaving) document.querySelectorAll('main .todo input').forEach(el => { el.disabled = true; });
   if (!m.sections.length) return;
   const audio = keepAudio || Object.assign(document.createElement('audio'), { id: 'audio', controls: true, preload: 'metadata', src: `/api/meetings/${m.id}/audio?section=${selectedSection}` });
   if (!keepAudio) {

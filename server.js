@@ -56,14 +56,34 @@ export function applyNumbered(segments, reply) {
   return segments.map((s, i) => ({ ...s, text: fixed.get(i + 1) ?? s.text }));
 }
 
-// Action items are the summary's "- [ ] task — owner [n]" lines; done state survives regeneration by matching task text.
+// Match existing tasks by text and owner to retain priority/completion; citations come from the new summary.
 export function parseActions(md, prev = []) {
-  const done = new Set((prev ?? []).filter(a => a.done).map(a => a.text));
-  return [...String(md ?? '').matchAll(/^\s*[-*]\s*\[([ xX])\]\s*(.+)$/gm)].map(([, x, body]) => {
+  const previous = Array.isArray(prev) ? prev : [];
+  const plain = text => String(text ?? '').replace(/\*\*(.+?)\*\*/g, '$1').trim();
+  const legacyDone = new Set(previous.filter(a => a.owner == null && a.done).map(a => plain(a.text)));
+  const actions = [...String(md ?? '').matchAll(/^\s*[-*]\s*\[([ xX])\]\s*(.+)$/gm)].map(([, x, body]) => {
     const cite = /\[(\d+)/.exec(body)?.[1];
     const [, text, owner] = /^(.*?)(?:\s*[—–]+\s+(.*))?$/.exec(body.replace(/\s*\[\d+(?:\s*[,，、-]\s*\d+)*\]/g, '').replace(/\*\*(.+?)\*\*/g, '$1').trim());
-    return { text, owner: owner?.trim() || '未指定', done: x !== ' ' || done.has(text), cite: cite ? +cite : null };
+    return { text, owner: owner?.trim() || '未指定', done: x !== ' ' || legacyDone.has(text), cite: cite ? +cite : null };
   });
+  const key = a => JSON.stringify([plain(a.text), String(a.owner ?? '').trim() || '未指定']);
+  const available = new Map(), retained = [], matched = new Set();
+  for (const action of actions) {
+    const id = key(action);
+    if (!available.has(id)) available.set(id, []);
+    available.get(id).push(action);
+  }
+  for (const old of previous) {
+    if (old.owner == null) continue;
+    const candidates = available.get(key(old));
+    if (!candidates?.length) continue;
+    const sameCitation = Number.isInteger(old.cite) ? candidates.findIndex(a => a.cite === old.cite) : -1;
+    const action = candidates.splice(Math.max(0, sameCitation), 1)[0];
+    action.done ||= old.done === true;
+    retained.push(action);
+    matched.add(action);
+  }
+  return [...retained, ...actions.filter(a => !matched.has(a))];
 }
 const cleanActions = a => Array.isArray(a) ? a.slice(0, 500).map(x => ({
   text: String(x?.text ?? ''), owner: String(x?.owner ?? ''), done: x?.done === true, cite: Number.isInteger(x?.cite) ? x.cite : null,

@@ -64,6 +64,9 @@ server.js  create() / appendSection()
 
 每則回答保留生成時的會議內容雜湊。會議內容在模型處理中改變時拒絕保存並提示重新提問；已保存回答若與目前內容版本不同，介面顯示過期提示，引用維持文字而不跳轉，避免 section 重新排序後指向錯誤發言。用量與儲存時間不影響內容版本。
 
+前端將提示詞設定、完整問題與回答回合分別收合；問題與回答均使用安全 Markdown 顯示並停用圖片載入。預設展開最新回合，使用者的展開選擇只留在目前帳號的前端狀態，不寫進會議或私人對話檔。頁籤以明顯選取樣式及方向鍵、Home／End 切換。
+
+會議底部待辦沿用 `actions` 陣列，分類使用既有 `owner`／`done`，不新增分類欄位。拖曳或上下移動會經既有 PATCH 儲存整個陣列的順序作為優先序，仍需 edit；view／readonly 可分類檢視，不能調整順序。儲存失敗保留原順序，儲存中鎖定重排與勾選，回應不覆蓋已切換到的會議。更新摘要時，`parseActions()` 依事項文字與負責人對應，保留既有順序及完成狀態，引用採用新摘要；新增事項依摘要順序附加，已移除的事項不保留。
 
 ## 學習迴圈（D-020）
 
@@ -125,7 +128,7 @@ summarizing：summarize() 與 suggestSpeakers() 同時執行；建議失敗不�
 | `comments[]` | `{id, userId, name, text, seg, createdAt}` |
 | `usage[]` | 每次 AI 呼叫：`{kind: transcribe｜correct｜summary, provider, model, label, effort, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, audioSeconds, costUsd, ms, at, error?, rejected?}`；`rejected` 是術語校對有改動被還原的行數（D-025）；一次處理的紀錄在 `processMeeting` 結束（含失敗）時寫入 |
 | `agentId`, `summaryBy` | 會議的 Agent；產生摘要的 Agent、模型、effort、時間 |
-| `actions[]` | `{text, owner, done, cite}`，摘要完成時由 `parseActions()` 從摘要的 `- [ ] 事項 — 負責人 [n]` 行解析；重新產生時，文字相同的待辦保留 `done`。舊會議沒有這個欄位時，讀取時才從摘要推導 |
+| `actions[]` | `{text, owner, done, cite}`，陣列順序為優先序。摘要完成時由 `parseActions()` 解析 `- [ ] 事項 — 負責人 [n]`；重跑時以文字與負責人對應，保留順序及完成狀態，更新引用，新增事項附加於後。相同事項重複時先對應未變的引用，否則依出現順序逐筆對應。沒有負責人欄位的舊資料僅沿用原本按文字繼承完成狀態的相容行為。舊會議沒有 actions 時，讀取時才從摘要推導 |
 
 `PATCH /api/meetings/:id` 的 `segSpeakers: { 段落索引: 講者編號 }` 用 `reassignSpeakers()` 改段落的講者（新講者用下一個編號，另外送 `speakers` 命名）。摘要提示會列出全部參與者，並說明講者標籤已由使用者校正，待辦負責人只用這些名字。
 
