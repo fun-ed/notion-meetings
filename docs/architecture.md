@@ -60,7 +60,7 @@ server.js  create() / appendSection()
 
 提問由獨立的 review 路由呼叫既有 `llm()`。模型與 effort 沿用會議的 Agent 選擇，輸入包含目前筆記、摘要、待辦、關鍵字、排序後的逐字稿及本人先前對話。團隊知識只作背景，模型必須區分會議事實、推測與建議。context window 仍由既有檢查處理，不默默裁切會議。
 
-對話與自訂提示詞存在 `DATA_DIR/reviews.json`，按登入者 id 隔離。會議的 view/edit 權限與本人資料範圍都要滿足，管理員的 owner 權限不會讓他讀取其他帳號的檢討。模型呼叫在儲存鎖外進行，同人同場的併發提問回 409，完成後重新確認權限，再以 `jsonStore.mutate()` 追加對話。會議只追加不含私人內容的用量紀錄，錯誤文字亦經過處理，避免上游回顯問題造成外洩。清除只影響本人在該場會議的對話。
+對話與自訂提示詞存在 `DATA_DIR/reviews.json`，按登入者 id 隔離。讀取、提問及清除均需會議 view 權限，包含 comment 與 readonly 帳號；管理員的 owner 權限不會讓他讀取其他帳號的檢討。模型呼叫在儲存鎖外進行，同人同場的併發提問回 409，完成後重新確認權限，再以 `jsonStore.mutate()` 追加對話。會議只追加不含私人內容的用量紀錄，錯誤文字亦經過處理，避免上游回顯問題造成外洩。清除只影響本人在該場會議的對話。
 
 每則回答保留生成時的會議內容雜湊。會議內容在模型處理中改變時拒絕保存並提示重新提問；已保存回答若與目前內容版本不同，介面顯示過期提示，引用維持文字而不跳轉，避免 section 重新排序後指向錯誤發言。用量與儲存時間不影響內容版本。
 
@@ -143,7 +143,7 @@ summarizing：summarize() 與 suggestSpeakers() 同時執行；建議失敗不�
 | `GET /api/admin`（含 `usage`：total、byKind、byModel、byDay）；`PUT /api/admin/settings`、`/api/admin/users/:id`；`POST /api/admin/users/:id/reset-password` | 管理後台（admin） |
 | `GET /api/ai`；`PUT /api/admin/ai`；`POST /api/admin/ai/models/:id/test` | 模型與 Agent 設定（非 admin 只看到啟用的 Agent 名稱） |
 | `GET`／`PUT /api/review-prompts` | 讀取內建提示詞與本人 custom 清單；PUT `{custom:[{id,title,prompt}]}` 只修改本人版本，內建提示詞不變 |
-| `GET`／`POST`／`DELETE /api/meetings/:id/review` | 私人 Q&A；GET 回本人 messages，POST `{question}` 依會議與本人對話回答，DELETE 清除本人對話。GET 需 view，POST／DELETE 需 edit，併發提問回 409 |
+| `GET`／`POST`／`DELETE /api/meetings/:id/review` | 私人 Q&A；GET 回本人 messages，POST `{question}` 依會議與本人對話回答，DELETE 清除本人對話。均需 view，併發提問回 409 |
 | `POST`／`GET /api/meetings/:id/shares`；`POST`／`DELETE /api/shares/:token` | 建立、列出、開啟、撤銷分享連結 |
 | `POST`／`DELETE /api/meetings/:id/comments` | 留言（需 comment 權限；刪除限本人或擁有者） |
 | `GET /api/search?q=` | 搜尋，回傳 `{terms, results[]}`；語法與計分見 D-011 |
@@ -234,7 +234,7 @@ MAI／Azure 的 phraseList 實測 200 個成功、201 個回 400（D-003 補充�
 - 會議清單與搜尋只回傳看得到的會議。
 - PATCH 需要 edit；改 `access` 需要 owner。
 - 留言需要 comment；重新轉錄或摘要需要 edit。
-- 私人檢討讀取需 view；提問與清除需 edit，但資料一律限制為登入者本人。修改會議權限不會把既有私人對話分享出去。
+- 私人檢討讀取、提問及清除均需 view，包含 comment 與 readonly 帳號，但資料一律限制為登入者本人。修改會議權限不會把既有私人對話分享出去。提問會使用設定的 AI 模型並產生用量與費用；共享內容的修改仍需 edit。
 - 看不到的會議回 404。
 
 介面在權限不足 edit 時停用所有編輯欄位。帶 `data-keep` 的元素維持可用，例如留言框和原始辨識切換。

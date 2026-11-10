@@ -1109,13 +1109,12 @@ const cleanReviewPrompts = value => {
   });
 };
 const safeReviewUsage = log => log.map(entry => entry.error ? { ...entry, error: 'review request failed' } : entry);
-async function reviewPermission(id, userId, level = 'view') {
+async function reviewPermission(id, userId) {
   const [m, accounts] = await Promise.all([load(id), db.read()]);
   const user = accounts.users.find(u => u.id === userId);
   need(user, 401, '請先登入');
   const perm = auth.permOf(user, m);
   need(auth.rank(perm) >= auth.rank('view'), 404, 'not found');
-  need(auth.rank(perm) >= auth.rank(level), 403, '你只有檢視或留言權限');
   return m;
 }
 const saveReviewUsage = (id, userId, log) => update(id, async cur => {
@@ -1123,7 +1122,6 @@ const saveReviewUsage = (id, userId, log) => update(id, async cur => {
   need(user, 401, '請先登入');
   const perm = auth.permOf(user, cur);
   need(auth.rank(perm) >= auth.rank('view'), 404, 'not found');
-  need(auth.rank(perm) >= auth.rank('edit'), 403, '你只有檢視或留言權限');
   return { usage: [...(cur.usage ?? []), ...safeReviewUsage(log)] };
 });
 const reviewContext = m => {
@@ -1147,7 +1145,6 @@ async function appendReviewTurn(id, userId, turn, contextHash) {
     need(user, 401, '請先登入');
     const perm = auth.permOf(user, cur);
     need(auth.rank(perm) >= auth.rank('view'), 404, 'not found');
-    need(auth.rank(perm) >= auth.rank('edit'), 403, '你只有檢視或留言權限');
     need(reviewContextHash(cur) === contextHash, 409, '會議內容已變更，請確認更新後再重新提問');
     messages = await reviews.mutate(data => {
       data.users ??= {};
@@ -1212,7 +1209,7 @@ async function runReview(id, user, m, body) {
     if (log.length) await saveReviewUsage(id, user.id, log);
     const turn = { id: randomUUID(), question, answer, createdAt: nowIso(), model: model.model, effort, contextHash };
     const messages = await appendReviewTurn(id, user.id, turn, contextHash);
-    await reviewPermission(id, user.id, 'edit');
+    await reviewPermission(id, user.id);
     return { messages, contextHash };
   } finally {
     reviewInFlight.delete(key);
@@ -1522,21 +1519,19 @@ async function route(req, res) {
     if (req.method === 'GET') {
       const stored = (await reviews.read()).users?.[user.id]?.meetings?.[id];
       const messages = Array.isArray(stored) ? stored : [];
-      const current = await reviewPermission(id, user.id, 'view');
+      const current = await reviewPermission(id, user.id);
       return send(res, 200, { messages, contextHash: reviewContextHash(current) });
     }
     if (req.method === 'POST') {
-      need(can('edit'), 403, '你只有檢視或留言權限');
       return send(res, 200, await runReview(id, user, m, await readJson(req)));
     }
     if (req.method === 'DELETE') {
-      need(can('edit'), 403, '你只有檢視或留言權限');
       const key = JSON.stringify([user.id, id]);
       need(!reviewInFlight.has(key), 409, '同一場會議的問答正在處理，請稍後再試');
       reviewInFlight.add(key);
       try {
         await reviews.mutate(async data => {
-          await reviewPermission(id, user.id, 'edit');
+          await reviewPermission(id, user.id);
           data.users ??= {};
           const entry = data.users[user.id] && typeof data.users[user.id] === 'object' ? data.users[user.id] : { custom: [], meetings: {} };
           const meetings = entry.meetings && typeof entry.meetings === 'object' ? { ...entry.meetings } : {};

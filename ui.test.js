@@ -573,3 +573,32 @@ test('in-flight review GET and POST responses cannot reactivate citations after 
   assert.match(dom.window.document.querySelector('.review-history').textContent, /會議內容已有變更/);
   assert.equal(getCount, 4, 'the pending GET is discarded and followed by another current-context read');
 });
+
+test('view, comment and readonly users can ask and clear private reviews without saving shared notes', async () => {
+  for (const [perm, role] of [['view', 'member'], ['comment', 'member'], ['view', 'readonly']]) {
+    const calls = [];
+    const { dom, context } = fullUiContext(async (path, options = {}) => {
+      const method = options.method ?? 'GET';
+      calls.push({ path, method });
+      if (path === '/api/review-prompts') return apiResponse({ presets: [{ id: 'question', title: '一般提問', prompt: '請回答。' }], custom: [] });
+      return apiResponse({ contextHash: 'same', messages: method === 'DELETE' ? [] : [{ question: '我的問題', answer: '私人回答', contextHash: 'same' }] });
+    });
+    const meeting = meetingFixture({ perm, notes: '共享筆記' });
+    context.me = { id: 'viewer', role };
+    context.current = meeting;
+    context.tab = 'review';
+    context.render(meeting);
+    await flushUi();
+    await flushUi();
+    assert.equal(dom.window.document.querySelector('[onclick="askReview()"]').disabled, false);
+    assert.equal(dom.window.document.querySelector('[onclick="clearReviewHistory()"]').disabled, false);
+    vm.runInContext("pendingNotes.set(current.id, '不得儲存的舊草稿')", context);
+    dom.window.document.querySelector('#review-question').value = '我的問題';
+    await context.askReview();
+    assert.ok(calls.some(call => call.method === 'POST' && call.path.endsWith('/review')));
+    assert.equal(calls.some(call => call.method === 'PATCH'), false);
+    await context.clearReviewHistory();
+    assert.ok(calls.some(call => call.method === 'DELETE' && call.path.endsWith('/review')));
+    assert.equal(context.reviewState(meeting.id).messages.length, 0);
+  }
+});

@@ -1129,7 +1129,7 @@ function retryReview() {
   render(current);
 }
 function reviewPanel(m) {
-  const state = reviewState(m.id), canEdit = rank(m.perm) >= rank('edit');
+  const state = reviewState(m.id), canReview = rank(m.perm) >= rank('view');
   const prompts = reviewPromptsUserId === me?.id ? reviewPromptsCache : null;
   if (!state.loading && (!state.loaded || state.needsRefresh) && !state.error) loadReview(m.id, state.loaded);
   if (prompts) initializeReviewPrompt(state, prompts);
@@ -1156,9 +1156,9 @@ function reviewPanel(m) {
         ${!state.selectedPrompt.startsWith('custom:') && custom.length >= 20 ? '<span class="muted">我的提示詞已達 20 個上限</span>' : ''}</div>
       <p class="muted">只有目前帳號能在此 app 查看對話；對話不隨會議分享。提問會交給目前設定的 AI 模型處理。</p>
       <label for="review-question">你的問題<textarea id="review-question" data-keep maxlength="10000" placeholder="依會議內容提問或追問…" oninput="setReviewField('question', this.value)" ${state.asking || state.clearing ? 'disabled' : ''}>${esc(state.question)}</textarea></label>
-      <div class="review-actions"><button class="primary" data-keep onclick="askReview()" ${!canEdit || state.asking || state.loading || state.clearing ? 'disabled title="需要編輯權限"' : ''}>${state.asking ? '檢討中…' : '提問'}</button>
+      <div class="review-actions"><button class="primary" data-keep onclick="askReview()" ${!canReview || state.asking || state.loading || state.clearing ? 'disabled title="需要檢視權限"' : ''}>${state.asking ? '檢討中…' : '提問'}</button>
         <span class="muted" role="status">${state.asking ? '正在整理回答…' : ''}</span>
-        ${state.messages.length ? `<button class="ghost" data-keep onclick="clearReviewHistory()" ${!canEdit || state.clearing || state.asking ? 'disabled title="需要編輯權限"' : ''}>${state.clearing ? '清除中…' : '清除我的對話'}</button>` : ''}</div>
+        ${state.messages.length ? `<button class="ghost" data-keep onclick="clearReviewHistory()" ${!canReview || state.clearing || state.asking ? 'disabled title="需要檢視權限"' : ''}>${state.clearing ? '清除中…' : '清除我的對話'}</button>` : ''}</div>
     </div>
     <div class="review-history" aria-label="本人可見的檢討紀錄">${state.messages.length ? state.messages.map(message => {
       const stale = state.needsRefresh || (message.contextHash != null && state.contextHash != null && message.contextHash !== state.contextHash);
@@ -1201,7 +1201,7 @@ async function saveReviewPrompt() {
 async function askReview() {
   if (!current || !me) return;
   const id = current.id, userId = me.id, epoch = reviewEpoch, state = reviewState(id);
-  if (rank(current.perm) < rank('edit') || state.asking) return;
+  if (rank(current.perm) < rank('view') || state.asking) return;
   state.question = $('#review-question')?.value ?? state.question;
   const draft = state.question, question = draft.trim();
   if (!question) { state.error = '請輸入問題。'; renderReviewIfCurrent(id); return; }
@@ -1214,7 +1214,7 @@ async function askReview() {
   renderReviewIfCurrent(id);
   let contextChangedDuringAsk = false;
   try {
-    await saveNotes();
+    if (rank(current.perm) >= rank('edit')) await saveNotes();
     if (!sameReviewSession(userId, epoch)) return;
     const generation = state.contextGeneration;
     const result = await api(`/api/meetings/${encodeURIComponent(id)}/review`, json('POST', { question: submitted }));
@@ -1245,7 +1245,7 @@ async function askReview() {
 async function clearReviewHistory() {
   if (!current || !me) return;
   const id = current.id, userId = me.id, epoch = reviewEpoch, state = reviewState(id);
-  if (rank(current.perm) < rank('edit') || state.clearing || !window.confirm('清除你在這場會議的所有檢討對話？此動作無法復原。')) return;
+  if (rank(current.perm) < rank('view') || state.clearing || !window.confirm('清除你在這場會議的所有檢討對話？此動作無法復原。')) return;
   state.clearing = true;
   state.error = '';
   renderReviewIfCurrent(id);

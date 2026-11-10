@@ -1034,8 +1034,7 @@ test('private review prompts and per-user meeting threads stay isolated and grou
     assert.deepEqual(emptyThread.messages, []);
     assert.match(emptyThread.contextHash, /^[0-9a-f]{64}$/);
     assert.deepEqual((await (await readonly(route)).json()).messages, [], 'readonly can see only its own empty thread');
-    assert.equal((await readonly(route, json('POST', { question: 'blocked' }))).status, 403);
-    assert.equal((await readonly(route, { method: 'DELETE' })).status, 403);
+    assert.equal((await readonly(route, { method: 'DELETE' })).status, 200);
     const empty = await (await admin(base, json('POST', { title: 'Empty review draft' }))).json();
     await admin(`${base}/${empty.id}`, json('PATCH', { access: 'edit' }));
     const requestCount = requests.length;
@@ -1138,9 +1137,32 @@ test('private review prompts and per-user meeting threads stay isolated and grou
     assert.equal(failedUsage.error, 'review request failed');
     assert.doesNotMatch(JSON.stringify(failedUsage), /PRIVATE_FAILED_REVIEW_QUESTION|upstream echoed/);
 
+    for (const access of ['view', 'comment']) {
+      await admin(`${base}/${meeting.id}`, json('PATCH', { access }));
+      for (const [account, label] of [[member, 'member'], [readonly, 'readonly']]) {
+        const question = `Private ${label} question with ${access} access`;
+        const answer = await account(route, json('POST', { question }));
+        assert.equal(answer.status, 200, `${label} can ask with ${access} access`);
+        assert.equal((await answer.json()).messages.at(-1).question, question);
+        assert.equal((await account(`${base}/${meeting.id}`, json('PATCH', { notes: 'must not change shared notes' }))).status, 403);
+        assert.equal((await account(`${base}/${meeting.id}/summarize`, json('POST', {}))).status, 403);
+        assert.equal((await account(route, { method: 'DELETE' })).status, 200);
+        assert.deepEqual((await (await account(route)).json()).messages, []);
+        assert.deepEqual((await (await admin(route)).json()).messages.map(x => x.question), [adminQuestion]);
+      }
+    }
+    assert.equal(localMeeting(meeting.id).notes, fixture.notes, 'private reviews do not change shared notes');
+
     await admin(`${base}/${meeting.id}`, json('PATCH', { access: 'private' }));
     assert.equal((await member(route)).status, 404, 'private meetings and threads are invisible');
     assert.equal((await member(`${base}/${meeting.id}`)).status, 404);
+    const deniedCount = requests.length;
+    for (const account of [member, readonly]) {
+      for (const method of ['GET', 'POST', 'DELETE']) {
+        assert.equal((await account(route, method === 'GET' ? {} : json(method, { question: 'inaccessible' }))).status, 404);
+      }
+    }
+    assert.equal(requests.length, deniedCount, 'inaccessible meetings never call the model');
     await admin(`${base}/${meeting.id}`, json('PATCH', { access: 'edit' }));
     const startRevoked = holdModel();
     const revokedRequest = member(route, json('POST', { question: 'No result after access is revoked' }));
