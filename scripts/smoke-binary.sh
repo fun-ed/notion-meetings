@@ -8,7 +8,7 @@ bin="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
 testset="$2"
 port="${3:-3960}"
 cd "$(dirname "$0")/.."
-version=$(node -p 'require("./package.json").version')
+version=$(mise exec -- node -p 'require("./package.json").version')
 data=$(mktemp -d)
 DATA_DIR="$data" PORT="$port" "$bin" >"$data/server.log" 2>&1 &
 pid=$!
@@ -19,5 +19,6 @@ fail() { echo "FAIL $*"; cat "$data/server.log"; exit 1; }
 grep -q "notion-meetings v$version " "$data/server.log" || fail "startup line is not v$version"
 curl -sf "http://localhost:$port/api/auth/me" | grep -q "\"version\":\"$version\"" || fail "/api/auth/me does not report v$version"
 cmp -s <(curl -sf "http://localhost:$port/") public/index.html || fail "embedded UI differs from public/index.html (rebuild)"
+cmp -s <(curl -sf "http://localhost:$port/markdown-runtime.js") <(mise exec -- node --input-type=module -e 'import { loadMarkdownRuntime } from "./ui-assets.js"; process.stdout.write(loadMarkdownRuntime())') || fail "embedded Markdown runtime differs from installed libraries"
 echo "PASS v$version starts, reports its version and serves the current UI"
-python3 -I eval/e2e.py "http://localhost:$port" "$testset"
+mise exec -- python3 -I eval/e2e.py "http://localhost:$port" "$testset"

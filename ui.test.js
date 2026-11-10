@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import { JSDOM } from 'jsdom';
+import { loadMarkdownRuntime } from './ui-assets.js';
 
 const html = fs.readFileSync(new URL('./public/index.html', import.meta.url), 'utf8');
 const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]);
@@ -9,23 +11,78 @@ const script = scripts.at(-1);
 const esc = html.match(/^const esc = .*;$/m)[0];
 const markdownSource = script.slice(script.indexOf('function markdown('), script.indexOf('const pendingNotes'));
 
-test('UI scripts parse and Markdown notes render without executing HTML or unsafe links', () => {
+function markdownContext() {
+  const dom = new JSDOM('', { runScripts: 'outside-only' });
+  dom.window.eval(loadMarkdownRuntime());
+  const context = dom.getInternalVMContext();
+  vm.runInContext(`${esc}\n${markdownSource}\n${script.slice(script.indexOf('const cites ='), script.indexOf('function transcriptCopy('))}`, context);
+  return context;
+}
+
+test('UI scripts parse and full Markdown renders with safe links and literal HTML', () => {
   for (const source of scripts) new vm.Script(source);
-  const context = vm.createContext({});
-  vm.runInContext(`${esc}\n${markdownSource}`, context);
-  const render = text => context.markdown(text);
-  const output = render('# 議程\n**重點** 和 *說明*\n- [x] 完成\n1. 下一步\n> 引言\n```js\n<script>alert(1)</script>\n```\n[文件](https://example.com)');
-  for (const expected of ['<h1>議程</h1>', '<strong>重點</strong>', '<em>說明</em>', 'type="checkbox" disabled checked', '<ol>', '<blockquote>引言</blockquote>', '<pre><code>', 'href="https://example.com"']) assert.ok(output.includes(expected), expected);
-  assert.doesNotMatch(output, /<script>/);
-  assert.doesNotMatch(render('[執行](javascript:alert) [內容](data:text/html,bad) <img src=x onerror=alert(1)>'), /href=|<img/);
-  assert.equal(render('`**literal**`'), '<p><code>**literal**</code></p>');
-  assert.match(render('```\n未結束的程式碼'), /<pre><code>未結束的程式碼<\/code><\/pre>/);
-  assert.doesNotMatch(render('[引號](https://example.com/"onclick="x)'), /href="[^"]*"onclick=/);
+  const context = markdownContext(), box = context.document.createElement('div');
+  box.innerHTML = context.markdown('# 議程\n\n**重點** 和 *說明*\n\n- [x] 完成\n1. 下一步\n\n> 引言\n\n```js\n<script>alert(1)</script>\n```\n[文件](https://example.com)');
+  assert.equal(box.querySelector('h1').textContent, '議程');
+  assert.equal(box.querySelector('strong').textContent, '重點');
+  assert.equal(box.querySelector('em').textContent, '說明');
+  assert.equal(box.querySelector('input').disabled, true);
+  assert.equal(box.querySelector('input').checked, true);
+  assert.ok(box.querySelector('ol'));
+  assert.equal(box.querySelector('blockquote').textContent.trim(), '引言');
+  assert.equal(box.querySelector('pre code').textContent.trim(), '<script>alert(1)</script>');
+  assert.equal(box.querySelector('a').href, 'https://example.com/');
+  for (const value of ['[執行](javascript:alert)', '[內容](data:text/html,bad)', '[編碼](javascript&#58;alert)', '<img src=x onerror=alert(1)>', '<svg onload=alert(1)>', '<input id=notes name=current>']) {
+    box.innerHTML = context.markdown(value);
+    assert.equal(box.querySelector('script, img, svg, input, [onclick], [onerror], [onload], [id], [name], [href]'), null, value);
+  }
+  assert.equal(context.markdown('`**literal**`').trim(), '<p><code>**literal**</code></p>');
+  box.innerHTML = context.markdown('```\n未結束的程式碼');
+  assert.equal(box.querySelector('pre code').textContent.trim(), '未結束的程式碼');
+  assert.doesNotMatch(context.markdown('[引號](https://example.com/"onclick="x)'), /href="[^"]*"onclick=/);
+});
+
+test('shared Markdown supports GFM tables, nested lists, references and images', () => {
+  const context = markdownContext(), box = context.document.createElement('div');
+  box.innerHTML = context.markdown('標題\n===\n\n| 項目 | 狀態 |\n| :--- | ---: |\n| **API** | ~~舊版~~ |\n\n1. 父項\n   - 子項\n     - 孫項\n\n[文件][doc] 與 https://example.com\n\n[doc]: https://example.com/docs "參考"\n\n![示意圖](https://example.com/image.png)\n\n---');
+  assert.equal(box.querySelector('h1').textContent, '標題');
+  assert.equal(box.querySelector('thead th').textContent, '項目');
+  assert.equal(box.querySelector('tbody td strong').textContent, 'API');
+  assert.equal(box.querySelector('tbody td del').textContent, '舊版');
+  assert.equal(box.querySelector('ol > li > ul > li > ul > li').textContent.trim(), '孫項');
+  assert.equal(box.querySelector('a[title="參考"]').href, 'https://example.com/docs');
+  assert.equal(box.querySelectorAll('a').length, 2);
+  assert.equal(box.querySelector('img').alt, '示意圖');
+  assert.ok(box.querySelector('hr'));
+  assert.match(html, /class="summary markdown"/);
+  assert.match(html, /class="markdown">\$\{markdown\(c.text\)\}/);
+  assert.equal(context.markdown('**API** 與 `code`', true), '<strong>API</strong> 與 <code>code</code>');
+  assert.match(html, /markdown\(a.text, true\)/);
+});
+
+test('summary Markdown preserves action indexes, saved completion and citation targets', () => {
+  const context = markdownContext(), box = context.document.createElement('div');
+  const m = { id: 'meeting', summary: '```\n- [ ] 程式碼示例\n```\n\n- [ ] **測試** — _Amy_ [2]\n- [ ] 父項\n  - [x] 子項 — Bob [3]\n\n引用 [2] 與 [2-3]，程式碼 `[3]` 與 [文件](https://example.com/3)。', actions: [
+    { text: '程式碼示例', owner: '未指定', done: false }, { text: '測試', owner: '_Amy_', done: true },
+    { text: '父項', owner: '未指定', done: false }, { text: '子項', owner: 'Bob', done: false },
+  ] };
+  const before = JSON.stringify(m);
+  box.innerHTML = context.renderSummary(m);
+  const inputs = [...box.querySelectorAll('input')];
+  assert.deepEqual(inputs.map(input => input.checked), [true, false, false]);
+  assert.deepEqual(inputs.map(input => input.disabled), [false, false, false]);
+  assert.deepEqual(inputs.map(input => input.getAttribute('onchange')), [1, 2, 3].map(i => `setDone("meeting", ${i}, this.checked)`));
+  assert.ok(box.querySelector('label.todo.done'));
+  assert.equal(box.querySelector('a.cite').getAttribute('onclick'), 'return seek(2)');
+  assert.ok([...box.querySelectorAll('a.cite')].some(a => a.textContent === '[2-3]' && a.getAttribute('onclick') === 'return seek(2)'));
+  assert.equal(box.querySelector('code a, pre a, a a'), null);
+  assert.equal(box.querySelector('a[href="https://example.com/3"]').textContent, '文件');
+  assert.equal(JSON.stringify(m), before, 'rendering must not mutate stored Markdown or actions');
 });
 
 test('notes autosave retains edits made while a previous save is in flight', async () => {
   let release;
-  const saved = [], status = {};
+  const saved = [], status = { dataset: { copyKind: 'notes' } };
   const context = vm.createContext({
     current: { id: 'draft', notes: '' },
     $: () => status,
@@ -41,6 +98,7 @@ test('notes autosave retains edits made while a previous save is in flight', asy
   const source = script.slice(script.indexOf('const pendingNotes'), script.indexOf('function notesEditor'));
   vm.runInContext(source, context);
   context.editNotes('第一版');
+  assert.equal(status.disabled, false, 'typing notes immediately enables copying');
   const first = context.saveNotes();
   await new Promise(resolve => setImmediate(resolve));
   context.editNotes('第二版');
@@ -148,4 +206,56 @@ test('failed note saves retain the pending draft and still allow navigation', as
   assert.equal(opened, 1);
   assert.equal(pendingNotes.get('meeting'), '# unsaved');
   assert.match(warnings[0], /內容仍暫存在此分頁/);
+});
+
+test('transcript copy follows section order, speaker names and visible text mode', () => {
+  const definitions = ['fmt', 'spk', 'tidy'].map(name => html.match(new RegExp(`^const ${name} = .*;$`, 'm'))[0]).join('\n');
+  const context = vm.createContext({});
+  vm.runInContext(`${definitions}\nlet showRaw = false, tidyView = true;\n${script.slice(script.indexOf('function transcriptCopy('), script.indexOf('function renderedCopyText('))}`, context);
+  const m = {
+    sections: [{ id: 'b', title: 'B & 確認' }, { id: 'a', title: 'A' }], speakers: { 0: 'Amy', 1: 'Bob' },
+    segments: [{ sectionId: 'b', start: 1, speaker: 0, text: '嗯，內容 & <tag>', raw: 'RAW B' },
+      { sectionId: 'a', start: 3, speaker: 1, text: '其他', raw: 'RAW A' }, { sectionId: 'b', start: 4, speaker: 0, text: '嗯。', raw: 'RAW filler' }],
+  };
+  assert.equal(context.transcriptCopy(m, 'b'), 'Section 1：B & 確認\n[1] 00:01 Amy：內容 & <tag>');
+  assert.equal(context.transcriptCopy(m, 'a'), 'Section 2：A\n[2] 00:03 Bob：其他');
+  const all = context.transcriptCopy(m);
+  assert.ok(all.indexOf('B & 確認') < all.indexOf('Section 2：A'));
+  assert.equal(context.transcriptCopy(m, 'missing'), '');
+  vm.runInContext('showRaw = true', context);
+  assert.match(context.transcriptCopy(m, 'b'), /RAW B[\s\S]*RAW filler/);
+  assert.doesNotMatch(context.transcriptCopy(m, 'b'), /RAW A/);
+  vm.runInContext('showRaw = false; tidyView = false', context);
+  assert.match(context.transcriptCopy(m, 'b'), /嗯。/);
+  assert.match(context.transcriptCopy({ originalName: 'legacy.wav', segments: [{ start: 0, speaker: 0, text: '舊逐字稿' }] }), /Section 1：legacy.wav\n\[1\] 00:00 Speaker A：舊逐字稿/);
+});
+
+test('copy uses rendered plain text, scopes transcript sections and reports clipboard errors', async () => {
+  const writes = [], rendered = [], status = {};
+  const context = vm.createContext({
+    current: { notes: '**重點** & <內容>' }, $: () => status,
+    markdown: () => '<strong>重點</strong> &amp; &lt;內容&gt;', renderSummary: () => '<h3>摘要</h3>',
+    renderedCopyText: html => { rendered.push(html); return html.startsWith('<h3>') ? '摘要' : '重點 & <內容>'; },
+    transcriptCopy: (_m, id) => `Section ${id}`,
+    navigator: { clipboard: { writeText: async text => writes.push(text) } },
+  });
+  vm.runInContext(script.slice(script.indexOf('async function copyContent('), script.indexOf('function seek(')), context);
+  await context.copyContent('notes');
+  assert.equal(writes[0], '重點 & <內容>');
+  assert.match(rendered[0], /<strong>/);
+  assert.equal(status.textContent, '已複製到剪貼簿');
+  await context.copyContent('summary');
+  assert.equal(writes[1], '摘要');
+  await context.copyContent('transcript', 'b');
+  assert.equal(writes[2], 'Section b');
+  context.navigator.clipboard.writeText = async () => { throw Error('denied'); };
+  await context.copyContent('summary');
+  assert.match(status.textContent, /瀏覽器未允許複製/);
+  context.navigator = {};
+  await context.copyContent('summary');
+  assert.match(status.textContent, /手動選取文字複製/);
+  context.renderedCopyText = () => '';
+  await context.copyContent('notes');
+  assert.equal(status.textContent, '尚無可複製的內容');
+  assert.equal(writes.length, 3);
 });

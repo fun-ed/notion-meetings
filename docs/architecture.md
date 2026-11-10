@@ -38,7 +38,11 @@ server.js  create() / appendSection()
 
 前端每 2 秒輪詢 `GET /api/meetings/:id`，直到狀態不是 `transcribing`、`correcting` 或 `summarizing`。使用者正在輸入時，輪詢不會重畫頁面。
 
-新介面先建立 `draft`，筆記輸入停止 500 毫秒後儲存，也可按「儲存筆記」。Markdown 預覽會跳脫原始 HTML，連結只接受 HTTP、HTTPS、mailto 與頁面錨點。唯讀使用者直接看預覽。加入檔案不會自動呼叫 AI，使用者按「產生會議筆記」後才開始。舊的原始檔 `POST /api/meetings?filename=...` 仍保留上傳後自動處理的行為。
+新介面先建立 `draft`，筆記輸入停止 500 毫秒後儲存，也可按「儲存筆記」。唯讀使用者直接看預覽。加入檔案不會自動呼叫 AI，使用者按「產生會議筆記」後才開始。舊的原始檔 `POST /api/meetings?filename=...` 仍保留上傳後自動處理的行為。
+
+摘要、筆記與留言共用 Marked 的 CommonMark／GFM 解析及 DOMPurify 安全過濾，支援表格、巢狀清單、待辦、參照連結、圖片與程式碼區塊。Action Items 的事項文字使用同一套行內解析。原始 HTML 顯示為文字，危險連結由 DOMPurify 移除。摘要引用只處理一般文字，不改寫連結與程式碼中的 `[n]`；待辦依事項與負責人對應儲存的 action，保留勾選狀態。
+
+瀏覽器從本機 `GET /markdown-runtime.js` 載入解析器與過濾器，不使用 CDN。`ui-assets.js` 共用載入邏輯供伺服器、建置與測試使用。摘要、筆記可複製顯示後的純文字；逐字稿可複製全部或指定 section，沿用目前的原文／精簡顯示，保留 section 順序、時間與講者。唯讀使用者也可複製，剪貼簿拒絕時顯示提示。原始 Markdown 與逐字稿不會因顯示或複製而改寫。
 
 每個 section 的時間由 00:00 起算，講者編號分開配置。頁面提供逐檔播放與下載；摘要引用會切到對應檔案的時間。調整 section 順序會同步重排逐字稿與既有引用，並提示重新產生摘要。檔名與檔案路徑由伺服器管理，排序 API 只能送既有 section 的 id 與標題。
 
@@ -117,6 +121,7 @@ summarizing：summarize() 與 suggestSpeakers() 同時執行；建議失敗不�
 | 方法與路徑 | 用途 |
 |---|---|
 | `GET /` | 介面 |
+| `GET /markdown-runtime.js` | 本機 Markdown 解析與過濾程式，公開靜態資產，不含會議或帳號資料 |
 | `GET /api/meetings` | 會議清單，依會議時間新到舊；含 `template`、`actions`、`attendees`、`people`、`teams` 與使用者屬性 |
 | `POST /api/auth/register`、`/login`、`/logout`，`GET /api/auth/me` | 帳號與 session（cookie `sid`）；`/me` 也回傳 `app: {version, repo}`（取自 `package.json`），側欄用來顯示版本並查 GitHub 最新 Release |
 | `PUT /api/me/profile`、`/api/me/password` | 個人資料（團隊、Y leader、成員、群組）與密碼 |
@@ -177,7 +182,8 @@ summarizing：summarize() 與 suggestSpeakers() 同時執行；建議失敗不�
 - 每個媒體檔的術語校對一次送該檔的完整逐字稿，輸出上限是 64k tokens；整體摘要仍受模型 context window 限制。
 - 錄音停止前，資料都在瀏覽器記憶體裡，分頁當掉就會遺失。
 - MediaRecorder 產生的 webm 沒有時長資訊，播放時拖曳跳段可能不準。
-- Markdown 預覽涵蓋常用筆記語法，尚未處理表格與巢狀清單，也不執行原始 HTML。
+- Markdown 原始 HTML 顯示為文字，不執行。
+- 摘要待辦依事項文字與負責人配對；兩者皆相同的重複項目沿用既有順序。
 - Benchmark 目前只接受單一 section，避免把不同檔案從 00:00 起算的時間軸誤當成重疊發言；多 section 的轉錄與摘要不受影響。
 
 ## 轉錄診斷
@@ -191,7 +197,7 @@ MAI／Azure 的 phraseList 實測 200 個成功、201 個回 400（D-003 補充�
 
 ## 執行檔（D-017）
 
-`scripts/build.sh` 先產生 `.build/ui.js`（內嵌介面字串），再依平台執行 `bun build --compile`。`server.js` 用 `COMPILED`（`import.meta.url` 含 `/$bunfs/`）判斷是否在執行檔內：在執行檔內，介面取自內嵌字串，資料預設在 `~/.notion-meetings`。`dist/` 與 `.build/` 不進 git。
+`scripts/build.sh` 先產生 `.build/ui.js`，預設匯出介面字串，另以 `markdownRuntime` 匯出 Marked 與 DOMPurify 程式，再依平台執行 `bun build --compile`。`server.js` 用 `COMPILED`（`import.meta.url` 含 `/$bunfs/`）判斷是否在執行檔內：在執行檔內，介面與 Markdown 程式都取自內嵌字串，資料預設在 `~/.notion-meetings`。`smoke-binary.sh` 會比對兩份內嵌資產。`dist/` 與 `.build/` 不進 git。
 
 ## 時間
 

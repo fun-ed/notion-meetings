@@ -12,6 +12,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import * as OpenCC from 'opencc-js';
 import * as auth from './auth.js';
 import * as ai from './ai.js';
+import { loadMarkdownRuntime } from './ui-assets.js';
 
 import pkg from './package.json' with { type: 'json' };
 
@@ -19,7 +20,9 @@ const ROOT = path.dirname(fileURLToPath(import.meta.url));
 // A `bun build --compile` binary runs from a virtual /$bunfs path: data goes to ~/.notion-meetings, the UI is embedded (scripts/build.sh).
 const COMPILED = import.meta.url.includes('/$bunfs/');
 const DATA = process.env.DATA_DIR ?? (COMPILED ? path.join(os.homedir(), '.notion-meetings') : path.join(ROOT, 'data'));
-const EMBEDDED_UI = COMPILED ? (await import('./.build/ui.js')).default : null;
+const EMBEDDED_UI_MODULE = COMPILED ? await import('./.build/ui.js') : null;
+const EMBEDDED_UI = EMBEDDED_UI_MODULE?.default ?? null;
+const MARKDOWN_RUNTIME = EMBEDDED_UI_MODULE?.markdownRuntime ?? loadMarkdownRuntime();
 const ID = /^[0-9a-f-]{36}$/;
 const LANG = /^(auto|[a-zA-Z]{2,5}(-[a-zA-Z]{2,4})?)$/;
 
@@ -1274,6 +1277,10 @@ async function adoptOrphanMeetings(userId) {
 
 async function route(req, res) {
   const url = new URL(req.url, 'http://localhost');
+  if (url.pathname === '/markdown-runtime.js' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8' });
+    return res.end(MARKDOWN_RUNTIME);
+  }
   if (url.pathname === '/') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     if (EMBEDDED_UI) return res.end(EMBEDDED_UI);

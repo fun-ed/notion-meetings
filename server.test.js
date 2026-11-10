@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
+import { loadMarkdownRuntime } from './ui-assets.js';
 
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'meetings-'));
 process.env.OPENROUTER_API_KEY = ''; // never call the real API from tests
@@ -225,6 +226,13 @@ before(async () => {
   base = `${api}/meetings`;
 });
 after(() => server.close());
+
+test('browser Markdown runtime is served locally before login', async () => {
+  const runtime = await fetch(`${api.replace(/\/api$/, '')}/markdown-runtime.js`);
+  assert.equal(runtime.status, 200);
+  assert.match(runtime.headers.get('content-type'), /application\/javascript/);
+  assert.equal(await runtime.text(), loadMarkdownRuntime());
+});
 
 test('upload stores the file, serves ranges and downloads, and records a missing-key error', async () => {
   const fetch = admin;

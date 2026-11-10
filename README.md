@@ -13,6 +13,8 @@ Releases: <https://github.com/fun-ed/notion-meetings/releases> · Changes: [CHAN
 - Microphone recording or upload of audio and video (mp4, mov, m4a, mp3, wav, webm). The original file is kept and can be downloaded.
 - Markdown notes (0.10.0): write notes before adding media. Notes autosave and have a preview for headings, lists, checkboxes, links and code blocks.
 - Add multiple audio or video files to one meeting page. Each file becomes a named section in the order added; move sections up or down, play or download each file, then generate a combined summary. Related meetings can share a page while keeping their transcript sections separate.
+- In development, not yet released: summaries, note previews and comments share CommonMark/GFM rendering, including tables, nested lists, references, images and code blocks. Action item text supports inline Markdown. Raw HTML stays literal and unsafe links are filtered; the parser is served locally and embedded in binaries.
+- In development, not yet released: copy summaries and notes as rendered plain text, or copy all transcript sections or one section with timestamps and speaker names. Transcript copies follow section order and the current raw/tidy view. Read-only users can copy too.
 - Transcription with MAI-Transcribe 2 through OpenRouter (zero data retention), OpenCC conversion to Taiwan wording, and a Claude pass that fixes only glossary terms. Every edit is checked: anything other than a change into a glossary term or an added 【?】 is reverted. Unsure words are marked 【?】 and the raw output is kept.
 - Speaker correction: rename speakers, reassign one segment or a range, merge two speakers, and add participants who did not speak.
 - Learning loop: meeting terms become a team glossary applied to every transcription; Hangul or kana in a Chinese transcript is flagged 【?】; Claude suggests who each speaker is from name cues ("thanks, X"), and you apply a suggestion with one click; corrected meetings can be frozen as a benchmark to track speaker accuracy and CER.
@@ -36,7 +38,7 @@ Releases: <https://github.com/fun-ed/notion-meetings/releases> · Changes: [CHAN
 | ffmpeg | On `PATH` (`brew install ffmpeg`, `apt install ffmpeg`) |
 | OpenRouter key | Required for transcription |
 | LLM | The magpie gateway (default) or a company LiteLLM proxy; see Run |
-| Node.js | Only when running from source |
+| Node.js | Only when running from source. Development tests require Node 22 (≥22.22.2), Node 24 (≥24.15) or Node 26+ for jsdom 31; use a supported LTS release. |
 
 Store the OpenRouter key outside the project, readable only by you (zsh):
 

@@ -4,16 +4,16 @@
 # Users still need ffmpeg on PATH, an OpenRouter key, and an Anthropic endpoint/key (see README「執行檔」).
 set -euo pipefail
 cd "$(dirname "$0")/.."
-version=$(node -p 'require("./package.json").version')
+version=$(mise exec -- node -p 'require("./package.json").version')
 if [ $# -gt 0 ]; then targets=("$@"); else targets=(bun-darwin-arm64 bun-darwin-x64 bun-linux-x64 bun-linux-arm64 bun-windows-x64); fi
-# Embed the UI as a string module; server.js imports it only inside a compiled binary.
+# Embed the UI and browser-side Markdown libraries as string exports.
 mkdir -p .build dist
-node -e 'const fs=require("fs"); fs.writeFileSync(".build/ui.js", "export default " + JSON.stringify(fs.readFileSync("public/index.html","utf8")) + ";\n")'
+mise exec -- node --input-type=module -e 'import fs from "node:fs"; import { loadMarkdownRuntime } from "./ui-assets.js"; fs.writeFileSync(".build/ui.js", "export default " + JSON.stringify(fs.readFileSync("public/index.html","utf8")) + ";\nexport const markdownRuntime = " + JSON.stringify(loadMarkdownRuntime()) + ";\n")'
 rm -f dist/SHA256SUMS
 for t in "${targets[@]}"; do
   name="notion-meetings-v${version}-${t#bun-}"
   [[ $t == *windows* ]] && name+=".exe"
-  bun build --compile --minify --target="$t" server.js --outfile "dist/$name"
+  mise exec -- bun build --compile --minify --target="$t" server.js --outfile "dist/$name"
   (cd dist && shasum -a 256 "$name" >> SHA256SUMS)
 done
 ls -lh dist

@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Meetings</title>
+<script src="/markdown-runtime.js"></script>
 <script>document.documentElement.dataset.theme = localStorage.getItem('theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');</script>
 <style>
   :root { color-scheme:light; --bg:#fff; --fg:#37352f; --muted:#787774; --faint:#9b9a97; --line:#e9e9e7; --side:#f7f7f5; --hover:#efefed;
@@ -202,7 +203,15 @@
   .markdown p { margin:8px 0; white-space:pre-wrap; }
   .markdown pre { overflow:auto; background:var(--code-bg); padding:12px; border-radius:4px; }
   .markdown blockquote { margin:8px 0; padding-left:12px; border-left:3px solid var(--line); color:var(--muted); }
+  .markdown table { border-collapse:collapse; display:block; max-width:100%; overflow-x:auto; margin:12px 0; }
+  .markdown th, .markdown td { border:1px solid var(--line); padding:6px 10px; }
+  .markdown th { background:var(--side); font-weight:600; }
+  .markdown img { max-width:100%; height:auto; }
+  .markdown li.markdown-task { list-style:none; }
+  .markdown input[type=checkbox] { margin-right:6px; }
   .notes-tools button:focus-visible, .section-row button:focus-visible, .section-row input:focus-visible, .notes:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .copy-source { position:fixed; left:-10000px; top:0; width:800px; pointer-events:none; }
+  .copy-source .todo { display:block; }
   [hidden] { display:none !important; }
   @media (max-width:700px) {
     .page { padding:20px 20px 80px; } .prop { grid-template-columns:100px minmax(0, 1fr); }
@@ -658,7 +667,7 @@ async function showActions() {
 
 const actRows = (rows, showMeeting) => `<table class="db"><tbody>${rows.map(({ m, a, i }) => `<tr>
   <td class="chk"><input type="checkbox" aria-label="完成：${esc(a.text)}" ${a.done ? 'checked' : ''} ${rank(m.perm) < rank('edit') ? 'disabled title="沒有編輯權限"' : ''} onchange="setDone('${m.id}', ${i}, this.checked)"></td>
-  <td class="name${a.done ? ' done' : ''}">${esc(a.text)}${a.cite ? ` <a class="cite" href="#${m.id}:seg-${a.cite}">[${a.cite}]</a>` : ''}</td>
+  <td class="name${a.done ? ' done' : ''}">${markdown(a.text, true)}${a.cite ? ` <a class="cite" href="#${m.id}:seg-${a.cite}">[${a.cite}]</a>` : ''}</td>
   <td>${tag([a.owner || '未指定', 'purple'])}${a.team ? teamLink(a.team) : ''}${a.leader ? leaderLink(a.leader) : ''}</td>
   ${showMeeting ? `<td><a href="#${m.id}">📄 ${esc(m.title)}</a> <span class="muted nowrap">${esc(whenLabel(m))}</span></td>` : ''}</tr>`).join('')}</tbody></table>`;
 
@@ -740,45 +749,20 @@ async function saveDir() {
 
 // ---- 新會議 ----
 
-// Raw HTML is escaped; Markdown links accept only explicit safe schemes or local anchors.
-// shortcut: preview covers common note syntax; use a maintained parser if nested Markdown or tables become required.
-function markdown(text) {
-  const inline = value => {
-    const code = [];
-    return esc(value).replace(/`([^`]+)`/g, (_, s) => `\u0000${code.push(`<code>${s}</code>`) - 1}\u0000`)
-      .replace(/\[([^\]]+)\]\(([^\s)]+)\)/g, (_, label, href) => /^(https?:\/\/|mailto:|#)/i.test(href) ? `<a href="${href}" rel="noreferrer">${label}</a>` : label)
-      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/~~(.+?)~~/g, '<del>$1</del>')
-      .replace(/\*([^*]+)\*/g, '<em>$1</em>').replace(/\u0000(\d+)\u0000/g, (_, i) => code[+i]);
-  };
-  const lines = String(text ?? '').replace(/\r\n?/g, '\n').split('\n'), out = [];
-  let list = '', fence = false, code = [];
-  const closeList = () => { if (list) out.push(`</${list}>`); list = ''; };
-  for (const line of lines) {
-    if (/^\s*```/.test(line)) {
-      closeList();
-      if (fence) { out.push(`<pre><code>${esc(code.join('\n'))}</code></pre>`); code = []; }
-      fence = !fence;
-      continue;
-    }
-    if (fence) { code.push(line); continue; }
-    const item = /^\s*(?:([-+*])|\d+[.)])\s+(.+)$/.exec(line);
-    if (item) {
-      const type = item[1] ? 'ul' : 'ol';
-      if (list !== type) { closeList(); list = type; out.push(`<${list}>`); }
-      const task = /^\[([ xX])\]\s+(.*)$/.exec(item[2]);
-      out.push(`<li>${task ? `<input type="checkbox" disabled ${task[1] !== ' ' ? 'checked' : ''}> ${inline(task[2])}` : inline(item[2])}</li>`);
-      continue;
-    }
-    closeList();
-    const heading = /^(#{1,6})\s+(.+)$/.exec(line);
-    if (heading) out.push(`<h${heading[1].length}>${inline(heading[2])}</h${heading[1].length}>`);
-    else if (/^\s*([-*_])(?:\s*\1){2,}\s*$/.test(line)) out.push('<hr>');
-    else if (/^>\s?/.test(line)) out.push(`<blockquote>${inline(line.replace(/^>\s?/, ''))}</blockquote>`);
-    else if (line.trim()) out.push(`<p>${inline(line)}</p>`);
-  }
-  closeList();
-  if (fence) out.push(`<pre><code>${esc(code.join('\n'))}</code></pre>`);
-  return out.join('\n');
+function markdown(text, inline = false) {
+  const box = document.createElement('div');
+  const renderer = new marked.Renderer();
+  renderer.html = ({ text }) => esc(text);
+  box.innerHTML = DOMPurify.sanitize(marked[inline ? 'parseInline' : 'parse'](String(text ?? ''), {
+    gfm: true, async: false, renderer,
+  }), { USE_PROFILES: { html: true }, FORBID_ATTR: ['id', 'name', 'style'] });
+  box.querySelectorAll('a').forEach(a => { a.rel = 'noreferrer'; });
+  box.querySelectorAll('input[type=checkbox]').forEach(input => {
+    input.disabled = true;
+    input.closest('li')?.classList.add('markdown-task');
+    input.setAttribute('aria-label', input.closest('li')?.textContent.trim() || '待辦事項');
+  });
+  return box.innerHTML;
 }
 
 const pendingNotes = new Map();
@@ -787,6 +771,8 @@ function editNotes(value) {
   current.notes = value;
   pendingNotes.set(current.id, value);
   $('#notes-status').textContent = '尚未儲存';
+  const copy = $('#copy-current');
+  if (copy?.dataset.copyKind === 'notes') copy.disabled = !value.trim();
   clearTimeout(notesTimer);
   notesTimer = setTimeout(() => saveNotes().catch(() => {}), 500);
 }
@@ -938,22 +924,85 @@ async function startCaptions() {
 }
 
 // ---- 會議頁 ----
-const cites = line => line.replace(/\[(\d+(?:\s*[,，、-]\s*\d+)*)\]/g, (_, ns) => ns.split(/[,，、]/).map(n => n.trim().split('-')[0])
-  .map(n => `<a class="cite" href="#seg-${n}" onclick="return seek(${n})">[${n}]</a>`).join(''));
+const cites = line => line.replace(/\[(\d+(?:\s*[,，、-]\s*\d+)*)\]/g, (_, ns) => ns.split(/[,，、]/).map(label => {
+  const n = Number(label.trim().split('-')[0]);
+  return `<a class="cite" href="#seg-${n}" onclick="return seek(${n})">[${label.trim()}]</a>`;
+}).join(''));
 
 const todo = (m, a, i, html, extra = '') => `<label class="todo ${a?.done ? 'done' : ''}"><input type="checkbox" ${a?.done ? 'checked' : ''} ${a ? '' : 'disabled'}
   onchange="setDone('${m.id}', ${i}, this.checked)"><span>${html}</span>${extra}</label>`;
 
-// Checkbox lines are the action items, in the same order the server parsed them.
 function renderSummary(m) {
-  let k = 0;
-  return esc(m.summary).split('\n').map(line => {
-    line = cites(line.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>'));
-    if (/^#{1,6} /.test(line)) return `<h3>${line.replace(/^#+ /, '')}</h3>`;
-    if (/^\s*[-*] \[[ xX]\] /.test(line)) { const i = k++; return todo(m, m.actions[i], i, line.replace(/^\s*[-*] \[[ xX]\] /, '')); }
-    if (/^\s*([-*]|\d+\.) /.test(line)) return `<ul><li>${line.replace(/^\s*([-*]|\d+\.) /, '')}</li></ul>`;
-    return line ? `<p>${line}</p>` : '';
-  }).join('');
+  const box = document.createElement('div');
+  box.innerHTML = markdown(m.summary);
+  const plain = text => { const el = document.createElement('div'); el.innerHTML = markdown(text); return el.textContent.replace(/\s+/g, ' ').trim(); };
+  const actions = (m.actions ?? []).map(a => ({ text: plain(a.text), owner: plain(a.owner || '未指定') })), used = new Set();
+  // shortcut: identical task/owner pairs follow stored order; add action IDs if duplicates must stay distinct.
+  box.querySelectorAll('input[type=checkbox]').forEach(input => {
+    const li = input.closest('li').cloneNode(true);
+    li.querySelectorAll('ul, ol, input').forEach(el => el.remove());
+    const body = (li.querySelector('p') ?? li).textContent.trim().split('\n')[0].replace(/\s*\[\d+(?:\s*[,，、-]\s*\d+)*\]/g, '').replace(/\s+/g, ' ').trim();
+    const [, text, owner] = /^(.*?)(?:\s*[—–]+\s+(.*))?$/.exec(body);
+    const i = actions.findIndex((a, i) => !used.has(i) && a.text === text && a.owner === (owner?.trim() || '未指定'));
+    if (i < 0) return;
+    used.add(i);
+    input.disabled = false;
+    input.checked = m.actions[i].done;
+    if (input.checked) input.setAttribute('checked', ''); else input.removeAttribute('checked');
+    input.setAttribute('onchange', `setDone(${JSON.stringify(m.id)}, ${i}, this.checked)`);
+    const label = document.createElement('label'), content = document.createElement('span');
+    label.className = `todo ${input.checked ? 'done' : ''}`;
+    while (input.nextSibling && !input.nextSibling.matches?.('ul, ol, p, blockquote, pre, table')) content.append(input.nextSibling);
+    input.replaceWith(label);
+    label.append(input, content);
+  });
+  const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT), nodes = [];
+  while (walker.nextNode()) if (!walker.currentNode.parentElement.closest('a, code, pre')) nodes.push(walker.currentNode);
+  for (const node of nodes) {
+    if (!/\[\d+(?:\s*[,，、-]\s*\d+)*\]/.test(node.textContent)) continue;
+    const replacement = document.createElement('template');
+    replacement.innerHTML = cites(esc(node.textContent));
+    node.replaceWith(replacement.content);
+  }
+  return box.innerHTML;
+}
+
+function transcriptCopy(m, sectionId = null) {
+  const sections = m.sections?.length ? m.sections : [{ id: 'legacy', title: m.originalName || m.title }];
+  return sections.flatMap((section, index) => {
+    if (sectionId !== null && section.id !== sectionId) return [];
+    const lines = m.segments.flatMap((s, i) => {
+      if ((s.sectionId ?? 'legacy') !== section.id) return [];
+      const text = showRaw ? s.raw ?? s.text : tidyView ? tidy(s.text) : s.text;
+      return text.trim() ? [`[${i + 1}] ${fmt(s.start)} ${spk(m, s.speaker)}：${text}`] : [];
+    });
+    return lines.length ? [`Section ${index + 1}：${section.title}\n${lines.join('\n')}`] : [];
+  }).join('\n\n');
+}
+
+function renderedCopyText(html) {
+  const box = document.createElement('div');
+  box.className = 'copy-source';
+  box.setAttribute('aria-hidden', 'true');
+  box.innerHTML = html;
+  box.querySelectorAll('input[type=checkbox]').forEach(input => input.replaceWith(document.createTextNode(input.checked ? '☑ ' : '☐ ')));
+  box.querySelectorAll('img').forEach(img => img.replaceWith(document.createTextNode(img.alt)));
+  box.querySelectorAll('button, input, select, textarea').forEach(el => el.remove());
+  document.body.append(box);
+  try { return box.innerText.trim(); } finally { box.remove(); }
+}
+
+async function copyContent(kind, sectionId = null) {
+  const status = $('#copy-status');
+  const text = kind === 'transcript' ? transcriptCopy(current, sectionId)
+    : renderedCopyText(kind === 'notes' ? markdown(current.notes) : renderSummary(current));
+  if (!text.trim()) { status.textContent = '尚無可複製的內容'; return; }
+  try {
+    await navigator.clipboard.writeText(text);
+    status.textContent = '已複製到剪貼簿';
+  } catch {
+    status.textContent = '瀏覽器未允許複製，請手動選取文字複製。';
+  }
 }
 
 function seek(n) {
@@ -997,9 +1046,11 @@ function render(m) {
   const staleNote = m.summaryStale && !busy ? `<p class="notice">筆記、講者或 section 已變更，摘要與待辦事項尚未更新。
     ${canEdit ? '<button onclick="resummarize()">↻ 重新產生摘要</button>' : ''}</p>` : '';
   const spkOpts = (cur, extra = '') => speakerIds.filter(x => x !== cur).map(x => `<option value="${x}">${esc(spk(m, x))}</option>`).join('') + extra;
+  const copyKind = m.sections.length ? tab : 'notes';
+  const copyAvailable = copyKind === 'transcript' ? m.segments.length : m[copyKind]?.trim();
   const bodies = {
     summary: busy && !m.summary ? `<p class="muted">⏳ ${STATUS[m.status][0]}…</p>`
-      : `${staleNote}<div class="summary">${renderSummary(m) || '<p class="muted">尚無摘要</p>'}</div>`,
+      : `${staleNote}<div class="summary markdown">${renderSummary(m) || '<p class="muted">尚無摘要</p>'}</div>`,
     notes: notesEditor(m, canEdit),
     transcript: !m.segments.length ? `<p class="muted">${busy ? `⏳ ${STATUS[m.status][0]}…` : '沒有逐字稿'}</p>` : `
       <div class="speakers">${speakerIds.map(s => `<label style="color:${COLORS[s % COLORS.length]}">${esc(`Speaker ${s < 26 ? String.fromCharCode(65 + s) : s + 1}`)}
@@ -1049,6 +1100,8 @@ function render(m) {
     <div class="ai-block">
       <div class="ai-head">🎙️ AI 會議筆記<span class="muted">${day(m.createdAt)}</span><span class="spacer"></span>
         ${m.sections.length ? `<button class="ghost" onclick="resummarize(true)" ${busy || uploading || rec?.state === 'recording' ? 'disabled' : ''} title="用目前術語重新轉錄所有 section">↻ 重新轉錄</button>` : ''}</div>
+      <div class="notes-tools"><span id="copy-status" class="muted" role="status"></span><span class="spacer"></span>
+        <button id="copy-current" data-keep data-copy-kind="${copyKind}" onclick="copyContent('${copyKind}')" ${copyAvailable ? '' : 'disabled'}>複製${{ summary: '摘要', notes: '筆記', transcript: '全部逐字稿' }[copyKind]}</button></div>
       ${m.sections.length ? '' : bodies.notes}
       <div class="ai-start">
         ${canEdit ? `<button id="recBtn" class="${rec?.state === 'recording' ? 'rec' : 'primary'}" onclick="toggleRec()" ${busy || uploading || !window.MediaRecorder ? 'disabled' : ''}>${rec?.state === 'recording' ? '■ 停止錄音並加入 section' : '開始錄音'}</button>
@@ -1067,7 +1120,8 @@ function render(m) {
           <button aria-label="下移 Section ${i + 1}" onclick="changeSection('${s.id}', null, 1)" ${busy || uploading || i === m.sections.length - 1 ? 'disabled' : ''}>↓</button>` : ''}</div>
         <div class="section-row"><button data-keep aria-pressed="${selectedSection === s.id}" onclick="playSection('${s.id}')">${selectedSection === s.id ? '目前播放' : '播放'}</button>
           <a href="/api/meetings/${m.id}/audio?section=${s.id}&download" download>${esc(s.originalName)}</a>
-          <span class="muted">${s.transcribed ? '已轉錄' : '待轉錄'}</span></div>
+          <span class="muted">${s.transcribed ? '已轉錄' : '待轉錄'}</span>
+          <button data-keep aria-label="複製 Section ${i + 1} 逐字稿" onclick="copyContent('transcript', '${s.id}')" ${m.segments.some(seg => (seg.sectionId ?? 'legacy') === s.id) ? '' : 'disabled'}>複製逐字稿</button></div>
       </section>`).join('')}</div>
       <div id="audioSlot"></div>
       <div class="player" ${m.sections.length ? '' : 'hidden'}>
@@ -1091,13 +1145,13 @@ function render(m) {
       ${m.sections.length ? bodies[tab] : ''}
     </div>
     <h2 class="h2">✅ Action Items</h2>
-    ${staleNote}${m.actions.map((a, i) => todo(m, a, i, esc(a.text), tag([a.owner || '未指定', 'purple']) + (a.team ? teamLink(a.team) : '') + (a.cite ? cites(`[${a.cite}]`) : ''))).join('')
+    ${staleNote}${m.actions.map((a, i) => todo(m, a, i, markdown(a.text, true), tag([a.owner || '未指定', 'purple']) + (a.team ? teamLink(a.team) : '') + (a.cite ? cites(`[${a.cite}]`) : ''))).join('')
       || '<p class="muted">摘要產生後，待辦事項會出現在這裡。</p>'}
     <p class="muted"><a href="#actions">在 Action Items 追蹤所有會議的待辦 →</a></p>
     <h2 class="h2">💬 留言</h2>
     ${(m.comments ?? []).map(c => `<div class="comment"><b>${esc(c.name)}</b> <span class="muted">${dt(c.createdAt)}
       ${c.seg ? `· <a href="#${m.id}:seg-${c.seg}" onclick="return seek(${c.seg})">逐字稿第 ${c.seg} 段</a>` : ''}</span>
-      ${c.userId === me.id || m.perm === 'owner' ? `<button class="ghost" data-keep onclick="delComment('${c.id}')">刪除</button>` : ''}<div>${esc(c.text)}</div></div>`).join('')
+      ${c.userId === me.id || m.perm === 'owner' ? `<button class="ghost" data-keep onclick="delComment('${c.id}')">刪除</button>` : ''}<div class="markdown">${markdown(c.text)}</div></div>`).join('')
       || '<p class="muted">還沒有留言</p>'}
     ${rank(m.perm) >= rank('comment') ? `<textarea id="cmt" data-keep aria-label="留言" placeholder="留言…"></textarea>
       <div class="row"><button data-keep onclick="addComment()">送出留言</button>
