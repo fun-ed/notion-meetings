@@ -66,7 +66,7 @@
   h1 { font-size:40px; font-weight:700; line-height:1.2; margin:0 0 8px; }
   h1 input { font:inherit; border:0; outline:none; width:100%; padding:0; background:transparent; }
   h1 input::placeholder { color:var(--placeholder); }
-  h2.h2 { font-size:22px; font-weight:600; margin:32px 0 6px; }
+  h2.h2, summary.h2 { font-size:22px; font-weight:600; margin:32px 0 6px; }
 
   /* Properties */
   .props { margin:8px 0 20px; border-bottom:1px solid var(--line); padding-bottom:14px; }
@@ -98,6 +98,7 @@
   details.group > summary::before { content:'▸'; color:var(--muted); transition:transform .15s; }
   details.group[open] > summary::before { transform:rotate(90deg); }
   details.group > summary:hover { background:var(--side); }
+  details.group > summary:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
   details.group > summary a { text-decoration:none; font-weight:600; }
   details.group > summary a.tag { font-weight:400; }
   details.group .count { margin-left:auto; color:var(--muted); font-size:13px; background:var(--hover); border-radius:10px; padding:0 8px; }
@@ -506,13 +507,14 @@ async function renderLearnAdmin(msg = '') {
   const pct = v => (v == null ? '—' : `${v}%`);
   $('#learn-admin').innerHTML = `<h2 class="h2">🧠 學習</h2>
     <p class="muted">團隊術語會在每場轉錄時加入 MAI 術語清單與 Claude 校對；會議的術語會自動加進來。停用的術語不套用。設計見 docs/plans/2026-10-21-learning-loop.md。</p>
-    <h3>團隊術語（${d.terms.filter(t => t.enabled !== false).length} 個啟用）</h3>
+    <details class="group" id="admin-terms" ${$('#admin-terms')?.open ? 'open' : ''}><summary><b>團隊術語（${d.terms.filter(t => t.enabled !== false).length} 個啟用）</b></summary>
     <div class="learn-row"><input aria-label="新增團隊術語" placeholder="新增術語，用逗號分隔" onchange="adminAddTerm(this)"> <span class="muted">${esc(msg)}</span></div>
     <table class="db"><thead><tr><th>術語</th><th>來源</th><th>加入時間</th><th>啟用</th><th></th></tr></thead><tbody>
     ${d.terms.map(t => `<tr><td>${esc(t.term)}</td><td>${src(t.source)}</td><td class="nowrap">${dt(t.addedAt)}</td>
       <td><input type="checkbox" aria-label="啟用 ${esc(t.term)}" ${t.enabled !== false ? 'checked' : ''} onchange="adminTerm(${esc(JSON.stringify(t.term))}, this.checked)"></td>
       <td><button class="ghost" onclick="adminTerm(${esc(JSON.stringify(t.term))}, null)">刪除</button></td></tr>`).join('') || '<tr><td colspan="5" class="muted">還沒有團隊術語</td></tr>'}</tbody></table>
-    <h3>Benchmark</h3>
+    </details>
+    <details class="group" id="admin-bench" ${$('#admin-bench')?.open ? 'open' : ''}><summary><b>Benchmark</b></summary>
     <p class="muted">在會議的逐字稿分頁校正講者後「凍結為 benchmark」。執行時用目前的設定重新轉錄每場凍結的會議（會呼叫 OpenRouter 與 Claude），不會改動會議本身。講者正確率只計輸出與參考實際重疊、而且講者配對正確的時間；CER 去掉空白與標點、簡繁統一後計算。＊整體分數依各場參考語音的時長加權。設定欄的端點、提示、術語是雜湊值，用來比對兩次執行的設定是否相同。</p>
     <div class="learn-row">${d.bench.cases.length} 場凍結的會議：${d.bench.cases.map(c => `<a href="#${esc(c.meetingId)}">📄 ${esc(byId[c.meetingId]?.title ?? c.meetingId)}</a>`).join('、') || '—'}
       <button onclick="runBench()" ${d.bench.running || !d.bench.cases.length ? 'disabled' : ''}>${d.bench.running ? `⏳ 執行中（${dt(d.bench.running.startedAt)} 開始）` : '▶ 執行 benchmark'}</button>
@@ -521,7 +523,7 @@ async function renderLearnAdmin(msg = '') {
     ${[...d.bench.runs].reverse().map(r => `<tr><td>${dt(r.finishedAt)}</td><td>${esc(r.version)}</td><td>${r.fingerprint ? `校對 ${esc(r.fingerprint.correct)}${r.fingerprint.effort ? `（${esc(r.fingerprint.effort)}）` : ''}<br>${r.fingerprint.endpoint ? `端點 ${esc(r.fingerprint.endpoint)} · 提示 ${esc(r.fingerprint.prompt)}<br>` : ''}術語 ${r.teamTerms} 個（${esc(r.fingerprint.terms)}）` : `術語 ${r.teamTerms} 個`}</td><td>${pct(r.speakerAccuracy)}</td><td>${pct(r.cer)}</td>
       <td>${usd(r.costUsd)}</td><td>${secs(r.ms)}</td><td>${r.cases.map(c => c.error ? `<span class="err">${esc(c.error)}</span>`
         : `${esc(c.title)}：講者 ${pct(c.accuracy)}（每 15 分 ${c.windows.map(pct).join('／')}；漏 ${pct(c.missed)}；${c.labels}／${c.refSpeakers} 位）· CER ${pct(c.cer)} · 術語 ${c.terms.hit}/${c.terms.all} · 【?】${c.unsure}`).join('<br>')}</td></tr>`).join('')
-      || '<tr><td colspan="8" class="muted">還沒有執行紀錄</td></tr>'}</tbody></table></div>`;
+      || '<tr><td colspan="8" class="muted">還沒有執行紀錄</td></tr>'}</tbody></table></div></details>`;
   if (d.bench.running) setTimeout(() => location.hash === '#admin' && renderLearnAdmin(), 5000);
 }
 async function adminAddTerm(input) {
@@ -544,7 +546,7 @@ function renderAIAdmin(msg = '') {
   const usable = aiCfg.models.filter(m => m.enabled && m.provider !== 'gemini');
   const test = t => !t ? '<span class="muted">未測試</span>'
     : `${tag(t.ok ? ['正常', 'green'] : ['失敗', 'red'])} <span class="muted">${dt(t.at)} · ${t.latencyMs} ms${t.usage ? ` · ${num(inTotal(t.usage))}→${num(t.usage.outputTokens)} tokens` : ''}${t.error ? ` · ${esc(t.error)}` : ''}</span>`;
-  $('#ai-admin').innerHTML = `<h2 class="h2">🤖 模型</h2>
+  $('#ai-admin').innerHTML = `<details class="group" id="admin-models" ${$('#admin-models')?.open ? 'open' : ''}><summary class="h2">🤖 模型</summary>
     <p class="muted">每個模型設定自己的 LLM Endpoint 與 API key。「OpenAI 相容」適用公司 LiteLLM、magpie、OpenAI 等 <code>/v1/chat/completions</code> 端點；「Anthropic」是原生 Anthropic API。
       Endpoint 留空時，OpenAI 相容用 <code>OPENAI_BASE_URL</code>，Anthropic 用 <code>ANTHROPIC_BASE_URL</code>。API key 只存在這台電腦的 <code>data/secrets.json</code>，同一個 Endpoint 的模型共用，存了之後看不到完整內容；也可以改填環境變數名稱。
       <b>逐字稿與筆記會送到這裡設定的端點</b>。送出前會檢查內容加輸出上限是否超過 context window。</p>
@@ -568,7 +570,7 @@ function renderAIAdmin(msg = '') {
     <div class="learn-row" data-uses>用途：術語校對用 <select data-use="correct" aria-label="術語校對模型">${opt(['', ...usable.map(m => m.id)], aiCfg.uses?.correct ?? '', ['預設模型', ...usable.map(m => m.label)])}</select>
       講者建議用 <select data-use="speakers" aria-label="講者建議模型">${opt(['', ...usable.map(m => m.id)], aiCfg.uses?.speakers ?? '', ['預設模型', ...usable.map(m => m.label)])}</select>
       <span class="muted">摘要依會議的 Agent 設定</span></div>
-    <h2 class="h2">🧩 Agents</h2>
+    </details><details class="group" id="admin-agents" ${$('#admin-agents')?.open ? 'open' : ''}><summary class="h2">🧩 Agents</summary>
     <p class="muted">Agent 是會議的預設系統提示。前台選了 Agent，摘要會依它的焦點整理；可指定模型與 effort（留空則用預設模型）。Skills 一行一個 SKILL.md 路徑或 URL，內容會放進系統提示。Remote MCP 目前不支援（magpie 不轉送，見 docs/plans/2026-10-20-roadmap.md）。</p>
     ${aiCfg.agents.map((a, i) => `<details class="group" data-agent data-i="${i}">
       <summary><input type="checkbox" data-f="enabled" ${a.enabled ? 'checked' : ''} aria-label="啟用 ${esc(a.name)}" onclick="event.stopPropagation()">
@@ -581,11 +583,13 @@ function renderAIAdmin(msg = '') {
         ${prop('💬', '系統提示', `<textarea data-f="systemPrompt" rows="5" aria-label="系統提示">${esc(a.systemPrompt)}</textarea>`)}
         ${prop('📚', 'Skills', `<textarea data-f="skills" rows="2" placeholder="~/.agents/skills/xxx/SKILL.md 或 https://…/SKILL.md" aria-label="Skills">${esc(a.skills.join('\n'))}</textarea>`)}
       </div>${a.builtin ? '' : `<button onclick="removeAgent(${i})">刪除這個 Agent</button>`}</details>`).join('')}
-    <div class="row"><button onclick="addAgent()">＋ 新增 Agent</button><button class="primary" onclick="saveAI()">儲存模型與 Agent 設定</button> <span id="ai-msg" class="muted">${esc(msg)}</span></div>`;
+    <div class="row"><button onclick="addAgent()">＋ 新增 Agent</button></div></details>
+    <div class="row"><button class="primary" onclick="saveAI()">儲存模型與 Agent 設定</button> <span id="ai-msg" class="muted">${esc(msg)}</span></div>`;
 }
 
 function collectAI() {
-  const val = el => el.type === 'checkbox' || el.type === 'radio' ? el.checked : el.type === 'number' ? +el.value : el.value;
+  const val = el => el.type === 'checkbox' || el.type === 'radio' ? el.checked : el.type === 'number' ? +el.value
+    : el.dataset.f === 'skills' ? el.value.split('\n').map(s => s.trim()).filter(Boolean) : el.value;
   const read = (sel, base) => [...document.querySelectorAll(sel)].map(row => {
     const o = { ...base[+row.dataset.i] };
     row.querySelectorAll('[data-f]').forEach(el => { o[el.dataset.f] = val(el); });

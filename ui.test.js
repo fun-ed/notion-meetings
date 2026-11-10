@@ -602,3 +602,41 @@ test('view, comment and readonly users can ask and clear private reviews without
     assert.equal(context.reviewState(meeting.id).messages.length, 0);
   }
 });
+
+test('admin sections collapse, preserve open state and keep hidden settings in saves', async () => {
+  let saved;
+  const learned = { terms: [{ term: 'SyntheticTerm', source: 'manual', addedAt: '2026-11-10T10:00:00+08:00', enabled: true }], bench: { cases: [], runs: [] } };
+  const { dom, context, set } = fullUiContext(async (path, options = {}) => {
+    if (path === '/api/learned') return apiResponse(learned);
+    if (path === '/api/admin/ai') { saved = JSON.parse(options.body); return apiResponse(saved); }
+    throw Error(`Unexpected admin request: ${path}`);
+  });
+  dom.window.document.querySelector('main').innerHTML = '<div id="learn-admin"></div><div id="ai-admin"></div>';
+  set({ meetings: [meetingFixture()], aiCfg: {
+    models: [{ id: 'test-model', label: 'Test model', enabled: true, default: true, provider: 'anthropic', model: 'test-model', effort: 'low' }],
+    agents: [{ id: 'test-agent', name: 'Test agent', enabled: true, model: '', effort: '', skills: [], builtin: false }], uses: {},
+  } });
+  await context.renderLearnAdmin();
+  context.renderAIAdmin();
+  for (const id of ['admin-terms', 'admin-bench', 'admin-models', 'admin-agents']) {
+    const details = dom.window.document.getElementById(id);
+    assert.equal(details.tagName, 'DETAILS');
+    assert.equal(details.open, false);
+    details.open = true;
+  }
+  await context.renderLearnAdmin('已更新');
+  assert.equal(dom.window.document.getElementById('admin-terms').open, true);
+  assert.equal(dom.window.document.getElementById('admin-bench').open, true);
+  dom.window.document.querySelector('[data-model] [data-f="label"]').value = 'Edited model';
+  context.addAgent();
+  assert.equal(dom.window.document.getElementById('admin-agents').open, true);
+  assert.equal(dom.window.document.getElementById('admin-models').open, true);
+  dom.window.document.getElementById('admin-models').open = false;
+  dom.window.document.getElementById('admin-agents').open = false;
+  assert.equal(dom.window.document.querySelector('[onclick="saveAI()"]').closest('details'), null);
+  await context.saveAI();
+  assert.equal(saved.models[0].label, 'Edited model');
+  assert.equal(saved.agents.length, 2);
+  assert.equal(dom.window.document.getElementById('admin-models').open, false);
+  assert.equal(dom.window.document.getElementById('admin-agents').open, false);
+});
