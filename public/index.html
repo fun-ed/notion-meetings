@@ -9,15 +9,15 @@
 <style>
   :root { color-scheme:light; --bg:#fff; --fg:#37352f; --muted:#787774; --faint:#9b9a97; --line:#e9e9e7; --side:#f7f7f5; --hover:#efefed;
     --accent:#2383e2; --red:#eb5757; --input:#fff; --side-link:#5f5e5b; --placeholder:#e1e1df; --code-bg:#f2f1ee; --mark:#fdecc8;
-    --hl:#fbf3db; --active-bg:#eef5fc; --active-ring:#c7dff5; --uncertain:#fde2dd;
+    --hl:#fbf3db; --active-bg:#eef5fc; --active-ring:#c7dff5; --uncertain:#fde2dd; --shadow:0 1px 2px rgba(15,15,15,.04), 0 4px 16px rgba(15,15,15,.04);
     --t-gray:#e3e2e0; --t-blue:#d3e5ef; --t-green:#dbeddb; --t-orange:#fadec9; --t-yellow:#fdecc8; --t-red:#ffe2dd; --t-purple:#e8deee; }
   /* Dark palette follows Notion's dark mode */
   [data-theme=dark] { color-scheme:dark; --bg:#191919; --fg:#d4d4d4; --muted:#9b9b9b; --faint:#7d7d7d; --line:#2f2f2f; --side:#202020; --hover:#2c2c2c;
     --accent:#3b8fe0; --red:#e06c63; --input:#252525; --side-link:#a5a5a5; --placeholder:#4a4a4a; --code-bg:#2c2c2c; --mark:#5c4b1e;
-    --hl:#3f3a28; --active-bg:#1d2b3a; --active-ring:#2b4c74; --uncertain:#5c2b28;
+    --hl:#3f3a28; --active-bg:#1d2b3a; --active-ring:#2b4c74; --uncertain:#5c2b28; --shadow:0 1px 2px rgba(0,0,0,.3);
     --t-gray:#373737; --t-blue:#1d3a50; --t-green:#203a2c; --t-orange:#4a3020; --t-yellow:#4a3d1a; --t-red:#4d2623; --t-purple:#372c47; }
   * { box-sizing: border-box; }
-  body { margin:0; font:15px/1.6 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC", "Noto Sans TC", sans-serif; color:var(--fg); background:var(--bg);
+  body { margin:0; -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility; font:16px/1.7 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC", "Noto Sans TC", sans-serif; color:var(--fg); background:var(--bg);
     /* Pin the app shell to the viewport edges instead of trusting 100vh, which some browsers size short. */
     position:fixed; inset:0; display:grid; grid-template-columns:var(--side-w, 240px) minmax(0, 1fr); grid-template-rows:minmax(0, 1fr); }
   body.side-collapsed { grid-template-columns:0 minmax(0, 1fr); } body.side-collapsed aside { visibility:hidden; }
@@ -33,52 +33,58 @@
   a { color:inherit; }
   input[type=checkbox], input[type=radio] { accent-color:var(--accent); }
   button, select, input, textarea { font:inherit; color:inherit; }
-  button { border:1px solid var(--line); background:var(--input); border-radius:6px; padding:3px 10px; cursor:pointer; }
+  button { border:1px solid var(--line); background:var(--input); border-radius:8px; padding:5px 12px; line-height:1.4; cursor:pointer; transition:background-color .15s, border-color .15s, color .15s; }
+  :where(button, a, select, summary, input[type=checkbox], input[type=radio]):focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
   button:hover:not(:disabled) { background:var(--hover); }
   button:disabled { opacity:.5; cursor:default; }
   button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
   button.primary:hover { background:#0b6ec5; }
   button.rec { background:var(--red); border-color:var(--red); color:#fff; }
   button.ghost { border-color:transparent; color:var(--muted); }
-  select { border:1px solid var(--line); border-radius:6px; padding:2px 6px; }
+  select { border:1px solid var(--line); border-radius:8px; padding:4px 8px; }
   .muted { color:var(--muted); font-size:14px; }
   .err { color:var(--red); }
   .spacer { flex:1; }
 
   /* Sidebar */
-  aside { background:var(--side); border-right:1px solid var(--line); overflow:auto; padding:10px 6px; font-size:14px; display:flex; flex-direction:column; }
+  aside { background:var(--side); border-right:1px solid var(--line); overflow:auto; padding:12px 8px; font-size:14px; display:flex; flex-direction:column; }
   aside > * { flex-shrink:0; }
   aside .ws { font-weight:600; padding:6px 4px 10px 10px; display:flex; align-items:center; }
   aside .ws .side-btn { margin-left:auto; }
-  aside a { display:flex; gap:8px; align-items:center; padding:3px 10px; border-radius:6px; text-decoration:none; color:var(--side-link); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  aside a { display:flex; gap:10px; align-items:center; padding:5px 10px; margin:1px 0; border-radius:6px; text-decoration:none; color:var(--side-link); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   aside a:hover, aside a.on { background:var(--hover); color:var(--fg); }
   aside a.on { font-weight:600; }
-  aside .side-h { color:var(--faint); font-size:12px; padding:14px 10px 4px; }
+  aside .side-h { color:var(--faint); font-size:12px; padding:20px 10px 6px; }
 
   /* Page */
   main { overflow:auto; }
-  .page { max-width:1280px; margin:0 auto; padding:32px 48px 120px; }
+  .page { max-width:1280px; margin:0 auto; padding:40px clamp(20px, 5vw, 64px) 120px; }
   .page.wide { max-width:1440px; }
   .crumb { font-size:14px; color:var(--muted); margin-bottom:28px; }
   .crumb a { text-decoration:none; }
   .crumb a:hover { text-decoration:underline; }
   .icon { font-size:64px; line-height:1; margin:8px 0 6px; }
-  h1 { font-size:40px; font-weight:700; line-height:1.2; margin:0 0 8px; }
+  h1 { font-size:40px; font-weight:700; line-height:1.25; letter-spacing:-.01em; margin:0 0 12px; overflow-wrap:break-word; min-width:0; }
   h1 input { font:inherit; border:0; outline:none; width:100%; padding:0; background:transparent; }
   h1 input::placeholder { color:var(--placeholder); }
-  h2.h2, summary.h2 { font-size:22px; font-weight:600; margin:32px 0 6px; }
+  h2.h2, summary.h2 { font-size:22px; font-weight:600; line-height:1.4; margin:40px 0 12px; }
 
   /* Properties */
   .props { margin:8px 0 20px; border-bottom:1px solid var(--line); padding-bottom:14px; }
-  .prop { display:grid; grid-template-columns:160px minmax(0, 1fr); align-items:start; min-height:34px; }
-  .prop > span:first-child { color:var(--muted); font-size:14px; padding:6px 6px 6px 0; }
-  .prop > div { padding:5px 6px; border-radius:4px; font-size:14px; }
-  .prop > div:hover { background:var(--hover); }
+  .prop { display:grid; grid-template-columns:160px minmax(0, 1fr); align-items:start; min-height:38px; }
+  .prop > span:first-child { color:var(--muted); font-size:14px; padding:8px 8px 8px 0; }
+  .prop > div { padding:7px 8px; border-radius:6px; font-size:14px; }
+  .prop > div:hover, .prop > div:focus-within { background:var(--hover); }
+  .prop .muted { display:inline-block; }
   .prop textarea { width:100%; border:0; background:transparent; resize:vertical; outline:none; padding:0; font-size:14px; min-height:22px; }
   .prop select { border:0; background:transparent; padding:0; }
   .prop input:not([type=checkbox]) { border:0; background:transparent; outline:none; padding:0; width:100%; font-size:14px; }
-  .prop .tag-add { width:140px; display:inline-block; }
-  .tag-x { border:0; background:none; padding:0 8px 0 0; margin-left:-4px; color:var(--muted); line-height:1; }
+  .prop .tag-add { width:min(260px, 100%); display:inline-block; }
+  .tag-x { border:0; background:none; padding:2px 8px 2px 2px; margin-left:-4px; color:var(--muted); line-height:1; }
+  .tag-x:hover:not(:disabled) { background:none; color:var(--red); }
+  .tag-suggest { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-top:6px; font-size:13px; }
+  .tag-suggest button { padding:0 8px; font-size:13px; border-style:dashed; color:var(--muted); }
+  .save-status { float:right; font-size:13px; }
   a.tag { text-decoration:none; }
   .kbd { margin-left:auto; color:var(--faint); font-size:12px; }
   input.search { width:100%; font-size:18px; border:1px solid var(--line); border-radius:8px; padding:8px 12px; outline:none; margin:8px 0 6px; }
@@ -117,8 +123,8 @@
   .views .view { border:0; border-radius:0; background:none; padding:6px 8px; color:var(--muted); font-size:14px; border-bottom:2px solid transparent; }
   .views .view.on { color:var(--fg); border-bottom-color:var(--fg); }
   table.db { width:100%; border-collapse:collapse; font-size:14px; }
-  table.db th { text-align:left; font-weight:400; color:var(--muted); padding:6px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
-  table.db td { padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  table.db th { text-align:left; font-weight:400; font-size:13px; color:var(--muted); padding:8px 12px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  table.db td { padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
   table.db th + th, table.db td + td { border-left:1px solid var(--line); }
   table.db tbody tr { cursor:pointer; }
   table.db tbody tr:hover { background:var(--side); }
@@ -128,7 +134,7 @@
   .db-foot a { text-decoration:none; }
 
   /* AI meeting notes block */
-  .ai-block { border:1px solid var(--line); border-radius:12px; padding:24px 28px; margin:28px 0 40px; }
+  .ai-block { border:1px solid var(--line); border-radius:14px; padding:28px 32px; margin:32px 0 48px; box-shadow:var(--shadow); }
   .ai-head { display:flex; gap:10px; align-items:center; font-weight:600; }
   .ai-head .muted { font-weight:400; }
   .tabs { display:flex; gap:8px; flex-wrap:wrap; margin:28px 0 24px; padding:6px; border:1px solid var(--line); border-radius:12px; background:var(--side); }
@@ -145,18 +151,23 @@
   #live i { color:var(--muted); }
   audio { width:100%; height:36px; margin:8px 0 0; }
 
-  .summary h3 { font-size:17px; font-weight:600; margin:16px 0 4px; }
-  .summary ul { margin:2px 0; padding-left:24px; }
-  .summary p { margin:4px 0; }
+  .summary h3 { font-size:17px; font-weight:600; margin:28px 0 8px; }
+  .summary ul { margin:8px 0; padding-left:24px; }
+  .summary p { margin:10px 0; }
   a.cite { font-size:11px; vertical-align:super; text-decoration:none; color:var(--accent); }
-  .todo { display:flex; gap:8px; align-items:baseline; padding:2px 0; cursor:pointer; }
+  .todo { display:flex; gap:10px; align-items:baseline; padding:4px 0; cursor:pointer; }
   .todo input { margin:0; transform:translateY(1px); }
   .todo.done > span:first-of-type { text-decoration:line-through; color:var(--faint); }
 
-  .speakers { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
-  .speakers label { font-size:13px; }
-  .speakers input { width:110px; border:1px solid var(--line); border-radius:6px; padding:1px 6px; }
-  .seg { display:grid; grid-template-columns:52px 96px 1fr; gap:8px; padding:4px 6px; border-radius:4px; font-size:15px;
+  .speakers { display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:12px; margin-bottom:16px; }
+  .speaker-card { display:grid; gap:8px; padding:12px 14px; border:1px solid var(--line); border-left:4px solid; border-radius:10px; background:var(--bg); }
+  .speaker-head { display:flex; justify-content:space-between; align-items:baseline; gap:8px; font-size:14px; font-weight:600; }
+  .speaker-head .muted { font-size:12px; font-weight:400; }
+  .speaker-card input, .speaker-card select { width:100%; min-width:0; color:var(--fg); }
+  .speaker-card input { border:1px solid var(--line); border-radius:8px; padding:6px 10px; }
+  .speaker-card input:focus, .range-pick input:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--active-ring); }
+  .transcript-tools { display:flex; gap:8px 12px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }
+  .seg { display:grid; grid-template-columns:52px 96px minmax(0, 1fr); gap:12px; padding:8px 10px; border-radius:8px; line-height:1.75;
     border-left:3px solid transparent; transition:background-color .3s, border-color .3s, box-shadow .3s; }
   .seg.active { border-left-color:var(--accent); background:var(--active-bg); box-shadow:0 0 0 1px var(--active-ring); animation:seg-glow .7s ease-out; }
   @keyframes seg-glow { from { box-shadow:0 0 0 5px rgba(35,131,226,.35); } to { box-shadow:0 0 0 1px var(--active-ring); } }
@@ -184,7 +195,7 @@
   .review summary:focus-visible { outline:2px solid var(--accent); outline-offset:4px; }
   .review-sources { margin:12px 0; }
   .review-sources li { overflow-wrap:anywhere; }
-  .meeting-todos { margin:40px 0; padding:16px 20px; border:1px solid var(--line); border-radius:12px; }
+  .meeting-todos { margin:40px 0; padding:20px 24px; border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow); }
   .meeting-todos > summary { font-size:20px; font-weight:600; }
   .meeting-todos-tools { display:flex; gap:16px; align-items:center; flex-wrap:wrap; margin:20px 0; }
   .meeting-todo { display:flex; gap:12px; align-items:flex-start; border:1px solid var(--line); border-radius:8px; padding:16px; margin:12px 0; background:var(--bg); }
@@ -204,25 +215,25 @@
   .seg b { font-weight:600; }
   .seg b.pick { cursor:pointer; } .seg b.pick:hover { text-decoration:underline dotted; }
   .seg select { font-size:13px; max-width:96px; }
-  .speakers select { font-size:12px; margin-left:4px; }
   .seg mark { background:var(--uncertain); }
   .notes { background:transparent; }
   .auth-box { max-width:380px; margin:12vh auto 0; }
   .auth-box label { display:block; margin:10px 0; font-size:14px; color:var(--muted); }
-  .auth-box input { display:block; width:100%; margin-top:4px; padding:6px 10px; border:1px solid var(--line); border-radius:6px; color:var(--fg); }
+  .auth-box input { display:block; width:100%; margin-top:6px; padding:9px 12px; border:1px solid var(--line); border-radius:8px; color:var(--fg); }
+  .auth-box input:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--active-ring); }
   .who { padding:6px 10px; font-size:13px; }
   /* Version and repo, pinned to the bottom of the sidebar */
   #ver { margin-top:auto; padding:12px 10px 4px; font-size:12px; color:var(--faint); line-height:1.6; }
   #ver a { display:block; padding:0; color:inherit; } #ver a:hover { background:none; color:var(--fg); } #ver a.tag { display:inline-block; padding:0 6px; }
-  .range-pick { display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin:2px 0 6px 60px; padding:6px 8px; font-size:13px; background:var(--hover); border-radius:6px; }
-  .range-pick input { width:56px; } .seg.in-range { background:var(--hl); }
+  .range-pick { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:4px 0 10px 60px; padding:10px 12px; font-size:14px; background:var(--side); border:1px solid var(--active-ring); border-radius:10px; box-shadow:var(--shadow); }
+  .range-pick input { width:64px; border:1px solid var(--line); border-radius:6px; padding:3px 6px; } .range-pick input.pick-name { width:160px; } .seg.in-range { background:var(--hl); }
   .hints { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin:4px 0 8px; font-size:13px; }
   .learn-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0; font-size:13px; }
   .learn-row input { border:1px solid var(--line); border-radius:6px; padding:1px 6px; min-width:220px; }
-  .comment { padding:8px 0; border-bottom:1px solid var(--line); font-size:14px; }
+  .comment { padding:12px 0; border-bottom:1px solid var(--line); font-size:14px; }
   .comment > div { white-space:pre-wrap; margin-top:2px; }
   #cmt { width:100%; min-height:60px; border:1px solid var(--line); border-radius:6px; padding:6px 8px; margin-top:8px; }
-  .notice { background:var(--hl); border-radius:6px; padding:8px 12px; margin:8px 0; font-size:14px; }
+  .notice { background:var(--hl); border-radius:8px; padding:10px 14px; margin:8px 0; font-size:14px; }
   .share-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; font-size:13px; padding:4px 0; }
   tr[data-model] input:not([type=checkbox]):not([type=radio]), tr[data-model] select, tr[data-model] textarea { width:100%; min-width:70px; border:1px solid var(--line); border-radius:4px; padding:1px 4px; font-size:13px; }
   details[data-agent] .props textarea, details[data-agent] .props input { border:1px solid var(--line); border-radius:4px; padding:2px 6px; }
@@ -256,6 +267,8 @@
   .copy-source { position:fixed; left:-10000px; top:0; width:800px; pointer-events:none; }
   .copy-source .todo { display:block; }
   [hidden] { display:none !important; }
+  @media (prefers-reduced-motion:reduce) { *, ::before, ::after { animation:none !important; transition:none !important; } }
+  @media (pointer:coarse) { button, select { min-height:40px; } aside a { padding:9px 12px; } }
   @media (max-width:700px) {
     body, body.side-collapsed { grid-template-columns:minmax(0, 1fr); }
     aside { position:fixed; inset:0 auto 0 0; width:min(280px, 85vw); z-index:30; border-right:1px solid var(--line); }
@@ -263,10 +276,14 @@
     body.side-collapsed .page { padding-top:52px; }
     .seg { grid-template-columns:44px minmax(0, 1fr); }
     .seg > span { grid-column:1 / -1; }
-    .page { padding:20px 20px 80px; } .prop { grid-template-columns:100px minmax(0, 1fr); }
+    .page { padding:20px 16px 80px; } .prop { grid-template-columns:96px minmax(0, 1fr); }
+    h1 { font-size:28px; } .icon { font-size:48px; }
+    .seg { gap:4px 10px; padding:10px; }
+    .range-pick { margin-left:0; } .speakers { grid-template-columns:minmax(0, 1fr); }
+    table.db:not(.usage) { display:block; overflow-x:auto; } table.db td { min-width:6em; } table.db td.name { min-width:12em; }
     .ai-head, .player { flex-wrap:wrap; } .ai-head .spacer, .player .spacer { display:none; }
     .ai-head .muted, .ai-head button, .player button, .player .muted { white-space:nowrap; flex-shrink:0; }
-    .ai-block { padding:20px 16px; }
+    .ai-block { padding:20px 14px; border-radius:12px; margin:24px -4px 40px; }
     .tabs { gap:6px; margin:24px 0; }
     .tabs .tab { flex-basis:calc(50% - 6px); min-width:0; padding:10px 8px; }
     .review-message { padding:8px 14px; }
@@ -964,10 +981,11 @@ async function showNew() {
   stop();
   if (me.role === 'readonly') return page('<p class="muted">唯讀帳號不能建立會議。</p>');
   const m = await api('/api/meetings', json('POST', { title: '無標題會議', lang: 'zh-TW', scheduledAt: localInput(new Date()), agentId: 'general' }));
+  focusTitle = true; // a new meeting starts by naming it
   location.hash = `${m.id}:notes`;
 }
 
-let uploading = false, selectedSection = null, notesPreview = false;
+let uploading = false, selectedSection = null, notesPreview = false, focusTitle = false, saveState = '';
 async function uploadFiles(files) {
   if (!files.length || uploading) return;
   const id = current.id;
@@ -1495,6 +1513,8 @@ function processingAction(m) {
 
 function render(m) {
   pick = null; // a re-render drops the range picker
+  // Re-rendering replaces every control; put focus back so adding several tags or naming speakers stays one flow.
+  const focused = document.activeElement, refocus = focused?.closest('main') && focused.getAttribute('aria-label'), caret = [focused?.selectionStart, focused?.selectionEnd];
   const busy = BUSY.includes(m.status);
   const keepLive = rec?.state === 'recording' && $('#live');
   m.sections ??= m.file ? [{ id: 'legacy', title: m.originalName, originalName: m.originalName }] : [];
@@ -1515,12 +1535,15 @@ function render(m) {
     notes: notesEditor(m, canEdit),
     review: tab === 'review' ? reviewPanel(m) : '',
     transcript: !m.segments.length ? `<p class="muted">${busy ? `⏳ ${STATUS[m.status][0]}…` : '沒有逐字稿'}</p>` : `
-      <div class="speakers">${speakerIds.map(s => `<label style="color:${COLORS[s % COLORS.length]}">${esc(`Speaker ${s < 26 ? String.fromCharCode(65 + s) : s + 1}`)}
-        <input type="text" list="dl-people" value="${esc(m.speakers[s] ?? '')}" placeholder="輸入姓名" onchange="renameSpeaker(${s}, this.value)">${speakerIds.length > 1
-          ? `<select aria-label="把 ${esc(spk(m, s))} 的所有段落併入另一位講者" onchange="mergeSpeaker(${s}, +this.value)"><option value="">併入…</option>${spkOpts(s)}</select>` : ''}</label>`).join('')}
-        <span class="spacer"></span><span id="copy-status" class="muted" role="status"></span><button id="copy-current" data-keep data-copy-kind="transcript" onclick="copyContent('transcript')">複製全部逐字稿</button></div>
+      <datalist id="dl-speakers">${opts(uniq([...m.participants, ...directory.people.map(p => p.name)]))}</datalist>
+      <div class="speakers">${speakerIds.map(s => { const label = `Speaker ${s < 26 ? String.fromCharCode(65 + s) : s + 1}`, mine = m.segments.filter(x => x.speaker === s);
+        return `<div class="speaker-card" style="border-left-color:${COLORS[s % COLORS.length]}">
+        <div class="speaker-head"><span style="color:${COLORS[s % COLORS.length]}">${esc(label)}</span><span class="muted">${mine.length} 段，約 ${fmt(mine.reduce((t, x) => t + Math.max(0, x.end - x.start), 0))}</span></div>
+        <input type="text" list="dl-speakers" aria-label="${esc(label)} 的姓名" value="${esc(m.speakers[s] ?? '')}" placeholder="輸入姓名" onchange="renameSpeaker(${s}, this.value)">${speakerIds.length > 1
+          ? `<select aria-label="把 ${esc(spk(m, s))} 的所有段落合併到另一位講者" onchange="mergeSpeaker(${s}, +this.value)"><option value="">合併到另一位…</option>${spkOpts(s)}</select>` : ''}</div>`; }).join('')}</div>
+      <div class="transcript-tools"><span class="spacer"></span><span id="copy-status" class="muted" role="status"></span><button id="copy-current" data-keep data-copy-kind="transcript" onclick="copyContent('transcript')">複製全部逐字稿</button></div>
       ${hintsHtml(m, canEdit)}
-      ${canEdit ? '<p class="muted">講者分錯時，點段落前的名字改成別人，Shift＋點另一段的名字可以一次改一整段範圍；整個講者是同一人時用「併入…」。</p>' : ''}
+      ${canEdit ? '<p class="muted">整位講者認錯：在上方卡片改姓名。只有幾段分錯：點段落前的名字，再點另一段的名字（或輸入段數）選範圍。兩位其實是同一人：用「合併到另一位…」。</p>' : ''}
       ${canEdit ? `<div class="learn-row"><input aria-label="加入團隊術語" placeholder="＋ 加入團隊術語（例如聽錯的專有名詞），下次轉錄起生效" onchange="addTeamTerm(this)"><span id="term-msg" class="muted"></span></div>` : ''}
       ${m.perm === 'owner' ? `<div class="learn-row">${m.benchmarkAt
         ? `📌 已凍結為 benchmark（${dt(m.benchmarkAt)}）<button class="ghost" onclick="setBenchmark(false)">取消凍結</button>`
@@ -1531,9 +1554,9 @@ function render(m) {
         const boundary = i === 0 || s.sectionId !== m.segments[i - 1].sectionId;
         const sectionId = s.sectionId ?? 'legacy', sectionIndex = m.sections.findIndex(section => section.id === sectionId);
         return `${boundary ? `<h3 class="section-heading"><span>${esc(m.sections[sectionIndex]?.title ?? m.originalName)}</span><button data-keep aria-label="複製 Section ${sectionIndex + 1} 逐字稿" onclick="copyContent('transcript', '${sectionId}')">複製這段</button></h3>` : ''}<div class="seg${text ? '' : ' filler'}" id="seg-${i + 1}"><time onclick="seek(${i + 1})">${fmt(s.start)}</time>
-        <b style="color:${COLORS[s.speaker % COLORS.length]}" ${canEdit ? `class="pick" title="點一下改講者；Shift＋點另一段選範圍" onclick="pickSpeaker(${i}, event)"` : ''}>${esc(spk(m, s.speaker))}</b><span>${esc(text).replaceAll('【?】', '<mark title="辨識不確定，請對照錄音">【?】</mark>')}</span></div>`; }).join('')}`,
+        <b style="color:${COLORS[s.speaker % COLORS.length]}" ${canEdit ? `class="pick" title="點一下改講者；選取中再點另一段可選範圍" onclick="pickSpeaker(${i}, event)"` : ''}>${esc(spk(m, s.speaker))}</b><span>${esc(text).replaceAll('【?】', '<mark title="辨識不確定，請對照錄音">【?】</mark>')}</span></div>`; }).join('')}`,
   };
-  page(`<div class="crumb"><a href="#">會議紀錄</a> / ${esc(m.title)}</div>
+  page(`<div class="crumb"><a href="#">會議紀錄</a> / ${esc(m.title)}<span id="save-status" class="muted save-status" role="status">${esc(saveState)}</span></div>
     <div class="icon">🎙️</div>
     <h1><input id="mtitle" value="${esc(m.title)}" aria-label="會議標題" onchange="patch({ title: this.value })"></h1>
     <div class="props">
@@ -1541,7 +1564,9 @@ function render(m) {
       ${prop('📍', '地點', `<input aria-label="地點" placeholder="空白" value="${esc(m.location)}" onchange="patch({ location: this.value })">`)}
       ${prop('📝', '簡述', `<input aria-label="簡述" placeholder="一句話說明這場會議" value="${esc(m.brief)}" onchange="patch({ brief: this.value })">`)}
       ${prop('🏷', '標籤', m.tags.map((t, i) => tagLink(t).replace('</a>', `</a><button class="tag-x" aria-label="移除標籤 ${esc(t)}" onclick="setTags(current.tags.filter((_, k) => k !== ${i}))">×</button>`)).join('')
-        + `<input class="tag-add" list="dl-tags" aria-label="新增標籤" placeholder="＋ 新增標籤" onchange="setTags([...current.tags, canon(this.value, allTags())])">`)}
+        + `<input class="tag-add" list="dl-tags" aria-label="新增標籤" placeholder="＋ 新增標籤，Enter 加入，逗號分隔多個" onchange="setTags([...current.tags, ...canonList(this.value, allTags())])" onkeydown="if (event.key === 'Backspace' && !this.value && current.tags.length) setTags(current.tags.slice(0, -1))">`
+        + (allTags().some(t => !m.tags.includes(t)) ? `<div class="tag-suggest"><span class="muted">既有標籤：</span>${allTags().filter(t => !m.tags.includes(t)).slice(0, 8)
+          .map(t => `<button type="button" data-v="${esc(t)}" onclick="setTags([...current.tags, this.dataset.v])">＋ ${esc(t)}</button>`).join('')}</div>` : ''))}
       ${prop('🤖', 'Agent', `<select aria-label="Agent" onchange="patch({ agentId: this.value })">${aiCfg.agents.filter(a => a.enabled !== false || a.id === m.agentId)
         .map(a => `<option value="${a.id}" ${(m.agentId || 'general') === a.id ? 'selected' : ''} title="${esc(a.description)}">${esc(a.name)}</option>`).join('')}</select>
         <span class="muted">產生或更新摘要時套用</span>`)}
@@ -1549,7 +1574,7 @@ function render(m) {
       ${prop('◎', '狀態', tag(STATUS[m.status] ?? [m.status, 'gray']) + (m.error ? ` <span class="err">${esc(m.error)}</span>` : ''))}
       ${prop('👥', '參與者', m.people.map(p => `<span class="tag gray" title="${esc(p.leader ? `Y leader：${p.leader}` : '')}">${esc(p.name)}${p.team ? ` · ${esc(p.team)}` : ''}</span>`
         + (m.participants.includes(p.name) ? `<button class="tag-x" aria-label="移除參與者 ${esc(p.name)}" onclick="setParticipants(current.participants.filter((_, k) => k !== ${m.participants.indexOf(p.name)}))">×</button>` : '')).join('')
-        + `<input class="tag-add" list="dl-people" aria-label="新增參與者" placeholder="＋ 新增參與者" onchange="setParticipants([...current.participants, canon(this.value, directory.people.map(p => p.name))])">`)}
+        + `<input class="tag-add" list="dl-people" aria-label="新增參與者" placeholder="＋ 新增參與者，Enter 加入，逗號分隔多個" onchange="setParticipants([...current.participants, ...canonList(this.value, directory.people.map(p => p.name))])" onkeydown="if (event.key === 'Backspace' && !this.value && current.participants.length) setParticipants(current.participants.slice(0, -1))">`)}
       ${prop('🏢', '團隊', [...m.teams.map(teamLink), ...uniq(m.people.map(p => p.leader)).map(leaderLink)].join('') || '<span class="muted">講者改成名錄裡的名字後會自動帶出</span>')}
       ${prop('🌐', '轉錄語言', `<select id="lang" aria-label="轉錄語言" onchange="patch({ lang: this.value }).catch(e => alert(e.message))" ${busy || uploading ? 'disabled' : ''}>${LANGS.map(([v, t]) => `<option value="${v}" ${m.lang === v ? 'selected' : ''}>${t}</option>`).join('')}</select>` + (m.language ? ` <span class="muted">偵測為 ${esc(m.language)}</span>` : ''))}
       ${prop('📖', '術語', `<textarea rows="1" aria-label="術語" placeholder="空白" onchange="patch({ glossary: this.value })">${esc(m.glossary)}</textarea>`
@@ -1617,10 +1642,16 @@ function render(m) {
       <div class="row"><button data-keep onclick="addComment()">送出留言</button>
       <label class="muted"><input type="checkbox" id="cmtseg" data-keep> 附上目前播放到的逐字稿段落</label></div>` : ''}`);
   if (keepLive && $('#live')) $('#live').replaceWith(keepLive);
+  if (focusTitle) { focusTitle = false; $('#mtitle')?.select(); }
+  else if (refocus) {
+    const el = document.querySelector(`main [aria-label="${CSS.escape(refocus)}"]`);
+    el?.focus();
+    if (caret[0] != null && el?.setSelectionRange) try { el.setSelectionRange(...caret); } catch {} // number inputs have no selection
+  }
   // Below edit permission, lock every editing control; viewing, playback and (if allowed) commenting stay usable.
   if (rank(m.perm) < rank('edit')) {
     document.querySelectorAll('main input, main textarea, main select').forEach(el => { if (!el.matches('[data-keep]')) el.disabled = true; });
-    document.querySelectorAll('main .tag-x, main .tag-add, .ai-head .ghost, .ai-foot button:not([data-keep]), .speakers select').forEach(el => { el.hidden = true; });
+    document.querySelectorAll('main .tag-x, main .tag-add, main .tag-suggest, .ai-head .ghost, .ai-foot button:not([data-keep]), .speakers select').forEach(el => { el.hidden = true; });
   }
   if (meetingActionSaving) document.querySelectorAll('main .todo input').forEach(el => { el.disabled = true; });
   if (!m.sections.length) return;
@@ -1692,7 +1723,12 @@ async function createShare(perm) {
 
 async function patch(body) {
   const id = current.id;
-  const m = await api(`/api/meetings/${id}`, json('PATCH', body));
+  const status = text => { saveState = text; const el = $('#save-status'); if (el) el.textContent = text; };
+  status('儲存中…');
+  let m;
+  try { m = await api(`/api/meetings/${id}`, json('PATCH', body)); }
+  catch (e) { status(`儲存失敗：${e.message}`); throw e; }
+  status(`已儲存 ${new Date().toLocaleTimeString('zh-TW', { timeZone: 'Asia/Taipei', hour: '2-digit', minute: '2-digit', hour12: false })}`);
   const affectsReview = ['notes', 'summary', 'actions', 'tags', 'glossary', 'sections', 'segments'].some(key => Object.hasOwn(body, key));
   if (affectsReview) invalidateReview(id);
   if (current?.id === id) current = { ...m, notes: pendingNotes.get(id) ?? m.notes };
@@ -1743,7 +1779,8 @@ async function setParticipants(names) {
 // Reassign a range of segments (click a name; Shift-click another name or type the end to widen it) to an existing speaker,
 // a participant who hasn't spoken yet, or someone new.
 function pickSpeaker(i, ev) {
-  pick = pick && ev?.shiftKey ? { ...pick, to: i } : { from: i, to: i };
+  // While the picker is open, a second click widens the range (Shift is not needed, so it also works on touch screens).
+  pick = pick && (ev?.shiftKey || document.querySelector('.range-pick')) && i !== pick.from ? { ...pick, to: i } : { from: i, to: i };
   showPick();
 }
 function showPick() {
@@ -1755,18 +1792,21 @@ function showPick() {
   const box = Object.assign(document.createElement('div'), { className: 'range-pick', innerHTML: `改成
     <select aria-label="改成哪位講者"><option value="">選擇講者…</option>${ids.map(x => `<option value="${x}">${esc(spk(m, x))}</option>`).join('')}
       ${fresh.map(x => `<option value="n:${esc(x)}">${esc(x)}（新講者）</option>`).join('')}<option value="new">＋ 其他人…</option></select>
-    第 <input type="number" aria-label="從第幾段" min="1" max="${n}" value="${lo + 1}"> 到 <input type="number" aria-label="到第幾段" min="1" max="${n}" value="${hi + 1}"> 段
-    <button class="primary">套用</button><button class="ghost">取消</button><span class="muted">Shift＋點另一段的名字可以選範圍</span>` });
-  const [from, to] = box.querySelectorAll('input'), [ok, cancel] = box.querySelectorAll('button');
+    <input class="pick-name" list="dl-speakers" aria-label="新講者姓名" placeholder="輸入姓名" hidden>
+    第 <input type="number" aria-label="從第幾段" min="1" max="${n}" value="${lo + 1}"> 到 <input type="number" aria-label="到第幾段" min="1" max="${n}" value="${hi + 1}"> 段（共 ${hi - lo + 1} 段）
+    <button class="primary">套用</button><button class="ghost">取消</button><span class="muted">再點另一段的名字可擴大範圍；Esc 取消</span>` });
+  const [nameInput, from, to] = box.querySelectorAll('input'), [ok, cancel] = box.querySelectorAll('button'), sel = box.querySelector('select');
+  sel.onchange = () => { nameInput.hidden = sel.value !== 'new'; if (!nameInput.hidden) nameInput.focus(); };
+  box.onkeydown = e => { if (e.key === 'Escape') cancel.click(); else if (e.key === 'Enter' && e.target.tagName !== 'BUTTON') { e.preventDefault(); ok.click(); } };
   const clamp = v => Math.max(0, Math.min(n - 1, (+v || 1) - 1));
   from.onchange = to.onchange = () => { pick = { from: clamp(from.value), to: clamp(to.value) }; showPick(); };
   cancel.onclick = () => { pick = null; render(current); };
   ok.onclick = async () => {
-    let target = box.querySelector('select').value, speakers;
-    if (!target) return box.querySelector('select').focus();
+    let target = sel.value, speakers;
+    if (!target) return sel.focus();
     if (target === 'new' || target.startsWith('n:')) {
-      const name = target === 'new' ? prompt('講者姓名') : target.slice(2);
-      if (!name?.trim()) return;
+      const name = target === 'new' ? nameInput.value : target.slice(2);
+      if (!name?.trim()) return nameInput.focus();
       target = Math.max(...ids) + 1;
       speakers = { ...m.speakers, [target]: canon(name, directory.people.map(p => p.name)) };
     }
@@ -1775,11 +1815,13 @@ function showPick() {
     render(current);
   };
   document.getElementById(`seg-${hi + 1}`).after(box);
-  box.querySelector('select').focus();
+  sel.focus();
 }
 
 async function mergeSpeaker(from, to) {
   if (!Number.isInteger(to)) return;
+  const count = current.segments.filter(s => s.speaker === from).length;
+  if (!confirm(`把「${spk(current, from)}」的 ${count} 段全部改成「${spk(current, to)}」？`)) return render(current);
   await patch({ segSpeakers: Object.fromEntries(current.segments.map((s, i) => [i, s.speaker]).filter(([, s]) => s === from).map(([i]) => [i, to])) });
   render(current);
 }
