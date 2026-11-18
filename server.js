@@ -935,7 +935,7 @@ async function loadAll() {
   return all.filter(Boolean).map(m => enrich(withDefaults(m), resolve)).sort((a, b) => when(b).localeCompare(when(a)));
 }
 
-const visible = async user => (await loadAll()).filter(m => auth.rank(auth.permOf(user, m)) >= auth.rank('view'));
+const visible = async user => (await loadAll()).filter(m => !m.deletedAt && auth.rank(auth.permOf(user, m)) >= auth.rank('view'));
 const list = async user => (await visible(user)).map(m => ({
   id: m.id, title: m.title, createdAt: m.createdAt, status: m.status, template: m.template, actions: m.actions,
   scheduledAt: m.scheduledAt, location: m.location, brief: m.brief, tags: m.tags, attendees: attendees(m), people: m.people,
@@ -1325,6 +1325,7 @@ async function accountRoute(req, res, url, user) {
     if (req.method === 'POST') { // open a link: grant its permission to the signed-in user
       await db.mutate(d => { const s = d.shares.find(x => x.token === a); s.uses = (s.uses ?? 0) + 1; s.lastUsedAt = nowIso(); });
       const m = await load(share.meetingId);
+      need(!m.deletedAt, 404, '分享連結不存在或已撤銷');
       if (auth.rank(auth.permOf(user, m)) < auth.rank(share.perm)) {
         await update(m.id, cur => ({ grants: [...(cur.grants ?? []).filter(g => !(g.userId === user.id && g.token === a)), { userId: user.id, perm: share.perm, token: a }] }));
       }
@@ -1416,6 +1417,28 @@ async function revokeShare(token) {
   const m = await load(share.meetingId).catch(() => null);
   if (m) await update(m.id, cur => ({ grants: (cur.grants ?? []).filter(g => g.token !== token) }));
   return share;
+}
+
+// Deleting a meeting moves it to the trash (deletedAt); it is purged for good on request or after TRASH_DAYS.
+export const TRASH_DAYS = 30;
+// A draft the user opened with "new meeting" and left untouched; only these are discarded without the trash.
+export const isEmptyDraft = m => m.status === 'draft' && !m.sections?.length && !m.file && !String(m.notes ?? '').trim()
+  && !m.tags?.length && !m.participants?.length && !m.brief && !m.location && !String(m.glossary ?? '').trim() && !m.comments?.length
+  && ['', '無標題會議', '未命名會議'].includes(String(m.title ?? '').trim());
+async function purgeMeeting(id) {
+  await writeQueues.get(id); // let a queued write land before the folder goes
+  await fsp.rm(dir(id), { recursive: true, force: true });
+  dirs.delete(id);
+  await db.mutate(d => { for (const x of d.shares.filter(x => x.meetingId === id)) x.revokedAt ??= nowIso(); });
+  await learned.mutate(d => { d.bench.cases = d.bench.cases.filter(c => c.meetingId !== id); });
+  await reviews.mutate(d => { for (const u of Object.values(d.users ?? {})) if (u?.meetings) delete u.meetings[id]; });
+}
+export async function purgeExpired(now = Date.now()) {
+  let purged = 0;
+  for (const m of await loadAll()) {
+    if (m.deletedAt && now - new Date(m.deletedAt).getTime() > TRASH_DAYS * 864e5) { await purgeMeeting(m.id); purged++; }
+  }
+  return purged;
 }
 
 // The first admin takes over meetings created before accounts existed.
@@ -1525,6 +1548,13 @@ async function route(req, res) {
     }
   }
   if (coll !== 'meetings') return send(res, 404, { error: 'not found' });
+  if (id === 'trash' && req.method === 'GET') {
+    await purgeExpired();
+    const nameOf = async uid => (await db.read()).users.find(u => u.id === uid)?.displayName ?? '';
+    const mine = (await loadAll()).filter(m => m.deletedAt && auth.permOf(user, m) === 'owner');
+    return send(res, 200, await Promise.all(mine.map(async m => ({ id: m.id, title: m.title, createdAt: m.createdAt, deletedAt: m.deletedAt,
+      deletedBy: await nameOf(m.deletedBy), purgeAt: nowIso(new Date(new Date(m.deletedAt).getTime() + TRASH_DAYS * 864e5)) }))));
+  }
   if (!id && req.method === 'GET') return send(res, 200, await list(user));
   if (!id && req.method === 'POST') {
     need(user.role !== 'readonly', 403, '唯讀帳號不能建立會議');
@@ -1535,6 +1565,24 @@ async function route(req, res) {
   const m = await load(id);
   const perm = auth.permOf(user, m), can = level => auth.rank(perm) >= auth.rank(level);
   need(can('view'), 404, 'not found'); // don't reveal meetings the user cannot see
+  if (m.deletedAt) { // in the trash: only the owner may restore or purge it; everything else acts as if it were gone
+    need(perm === 'owner', 404, 'not found');
+    if (action === 'restore' && req.method === 'POST') return send(res, 200, await view(await update(id, { deletedAt: null, deletedBy: null }), user));
+    if (!action && req.method === 'DELETE' && url.searchParams.has('ifEmpty')) return send(res, 200, { ok: true, kept: true }); // the draft cleanup never empties the trash
+    if (!action && req.method === 'DELETE') { await purgeMeeting(id); return send(res, 200, { ok: true, purged: true }); }
+    return send(res, 404, { error: 'not found' });
+  }
+  if (!action && req.method === 'DELETE') {
+    need(perm === 'owner', 403, '只有建立者或管理員能刪除會議');
+    need(!isBusy(m), 409, '會議正在處理，完成後才能刪除');
+    if (url.searchParams.has('ifEmpty')) { // leaving an untouched new draft
+      if (!isEmptyDraft(m)) return send(res, 200, { ok: true, kept: true });
+      await purgeMeeting(id);
+      return send(res, 200, { ok: true, purged: true });
+    }
+    await update(id, { deletedAt: nowIso(), deletedBy: user.id });
+    return send(res, 200, { ok: true });
+  }
   if (action === 'review') {
     if (req.method === 'GET') {
       const stored = (await reviews.read()).users?.[user.id]?.meetings?.[id];
@@ -1676,6 +1724,8 @@ if (import.meta.main && process.argv.includes('--debug-transcription')) {
   const port = Number(process.env.PORT ?? 3000);
   const moved = await migrateLayout();
   if (moved) console.log(`moved ${moved} meeting folder(s) into data/<YYYY-MM-DD>/`);
+  const purged = await purgeExpired();
+  if (purged) console.log(`purged ${purged} meeting(s) from the trash after ${TRASH_DAYS} days`);
   // Bind to localhost only (D-008, D-013): accounts exist, but there is no TLS or hardening for network exposure.
   server.listen(port, '127.0.0.1', async () => {
     console.log(`notion-meetings v${pkg.version}  http://localhost:${port}  (data: ${DATA})`);

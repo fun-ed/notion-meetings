@@ -50,7 +50,7 @@ server.js  create() / appendSection()
 
 每個 section 的時間由 00:00 起算，講者編號分開配置。頁面共用一個播放器，各部分的播放按鈕負責切換並開始播放，播放器上方顯示目前音檔的部分編號與名稱；下載仍依 section 分開。摘要引用會切到對應檔案的時間，保留原本的時間跳轉行為。調整 section 順序會同步重排逐字稿與既有引用，並提示重新產生摘要。檔名與檔案路徑由伺服器管理，排序 API 只能送既有 section 的 id 與標題。
 
-介面路由（hash）：`#` 會議紀錄資料庫、`#new` 新會議、`#search=<查詢>` 搜尋、`#actions` 待辦事項、`#people` 成員與團隊、`#me` 個人設定、`#admin` 管理後台、`#share/<token>` 開啟分享連結、`#<id>` 會議頁；`#<id>:seg-<n>` 會開啟逐字稿並跳到第 n 段，`#<id>:notes` 開啟我的筆記分頁。
+介面路由（hash）：`#` 會議紀錄資料庫、`#new` 新會議、`#search=<查詢>` 搜尋、`#actions` 待辦事項、`#people` 成員與團隊、`#trash` 垃圾桶、`#me` 個人設定、`#admin` 管理後台、`#share/<token>` 開啟分享連結、`#<id>` 會議頁；`#<id>:seg-<n>` 會開啟逐字稿並跳到第 n 段，`#<id>:notes` 開啟我的筆記分頁。
 
 讀取會議時（`view()`、`loadAll()`）會用名錄即時補上 `people`、`teams`，以及 `actions[].team/leader`。這些欄位不寫回 `meeting.json`，所以改了名錄，所有舊會議都會跟著更新。
 
@@ -126,6 +126,7 @@ summarizing：summarize() 與 suggestSpeakers() 同時執行；建議失敗不�
 | `scheduledAt`, `location`, `brief`, `tags` | 使用者設定的會議時間（`YYYY-MM-DDTHH:mm`，本機時間）、地點、一句話摘要、標籤；由 `cleanMeta()` 驗證，格式不對就存成空值 |
 | `ownerId`, `access`, `grants[]` | 擁有者、其他登入者的權限（private／view／comment／edit）、分享連結授權 `{userId, perm, token}` |
 | `comments[]` | `{id, userId, name, text, seg, createdAt}` |
+| `deletedAt`, `deletedBy` | 移到垃圾桶的時間與操作者（D-030）；有值時會議不出現在列表、搜尋、待辦，所有路由回 404，只有擁有者能還原或永久刪除 |
 | `usage[]` | 每次 AI 呼叫：`{kind: transcribe｜correct｜summary, provider, model, label, effort, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, audioSeconds, costUsd, ms, at, error?, rejected?}`；`rejected` 是術語校對有改動被還原的行數（D-025）；一次處理的紀錄在 `processMeeting` 結束（含失敗）時寫入 |
 | `agentId`, `summaryBy` | 會議的 Agent；產生摘要的 Agent、模型、effort、時間 |
 | `actions[]` | `{text, owner, done, cite}`，陣列順序為優先序。摘要完成時由 `parseActions()` 解析 `- [ ] 事項 — 負責人 [n]`；重跑時以文字與負責人對應，保留順序及完成狀態，更新引用，新增事項附加於後。相同事項重複時先對應未變的引用，否則依出現順序逐筆對應。沒有負責人欄位的舊資料僅沿用原本按文字繼承完成狀態的相容行為。舊會議沒有 actions 時，讀取時才從摘要推導 |
@@ -155,6 +156,9 @@ summarizing：summarize() 與 suggestSpeakers() 同時執行；建議失敗不�
 | `POST /api/meetings`，JSON body | 建立無媒體的 `draft`，可指定筆記與會議屬性，不呼叫 AI |
 | `POST /api/meetings/:id/sections?filename&title` | 加入一個音訊或影片 section，需 edit；依請求加入順序附加，不啟動轉錄 |
 | `GET /api/meetings/:id` | 會議資料 |
+| `DELETE /api/meetings/:id` | 需 owner（擁有者或管理員）；處理中回 409。一般會議移到垃圾桶；已在垃圾桶的會議永久刪除（資料夾、分享連結、benchmark 案例、所有人的私人檢討）。`?ifEmpty=1` 只在會議是未動過的新草稿時直接刪除，否則回 `{kept: true}`，也不會清除垃圾桶裡的會議（D-030） |
+| `POST /api/meetings/:id/restore` | 擁有者把垃圾桶裡的會議還原 |
+| `GET /api/meetings/trash` | 列出本人能管理（owner）的已刪除會議與 `purgeAt`；呼叫時與伺服器啟動時，清除超過 30 天的會議 |
 | `PATCH /api/meetings/:id` | 接受 `title`、`speakers`、`notes`、`glossary`、`actions`、`scheduledAt`、`location`、`brief`、`tags`、`participants`、`agentId`、`lang`、`segSpeakers`，`access` 限 owner。`sections: [{id,title},…]` 必須是全部既有 section 的完整排列，用於命名與排序。處理中拒絕 section 與語言變更 |
 | `GET /api/meetings/:id/audio?section=<id>` | 播放指定 section，省略時取第一個；支援 Range 與 `?download`，沒有媒體回 404 |
 | `GET /api/learned` | 管理員：整份學習資料；其他人：只有啟用的團隊術語 |

@@ -9,7 +9,7 @@ import { loadMarkdownRuntime } from './ui-assets.js';
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'meetings-'));
 process.env.OPENROUTER_API_KEY = ''; // never call the real API from tests
 const ai = await import('./ai.js');
-const { parseTranscription, transcriptText, extOf, toTaiwan, parseTerms, applyNumbered, keepTermEdits, aliasLines, parseActions, cleanMeta, parseQuery, searchMeetings, parseDirectory, resolver, usageOf, aggregateUsage, migrateLayout, reassignSpeakers, openaiUsage, isTransient, keyScope, viaEnv, apiKeyFor, llmKeyMissing, knowledgeText, RETRY, mergeTerms, flagForeignScript, cleanHints, cer, speakerAccuracy, bestAssignment, termHits, localDay, nowIso, searchMeetings: search2, server } = await import('./server.js');
+const { parseTranscription, transcriptText, extOf, toTaiwan, parseTerms, applyNumbered, keepTermEdits, aliasLines, parseActions, cleanMeta, parseQuery, searchMeetings, parseDirectory, resolver, usageOf, aggregateUsage, migrateLayout, reassignSpeakers, openaiUsage, isTransient, keyScope, viaEnv, apiKeyFor, llmKeyMissing, knowledgeText, RETRY, mergeTerms, flagForeignScript, cleanHints, cer, speakerAccuracy, bestAssignment, termHits, localDay, nowIso, searchMeetings: search2, isEmptyDraft, purgeExpired, TRASH_DAYS, server } = await import('./server.js');
 
 test('parseTranscription maps verbose_json segments to speaker segments', () => {
   const r = parseTranscription({ language: 'zh', segments: [
@@ -1228,4 +1228,55 @@ test('private review prompts and per-user meeting threads stay isolated and grou
     globalThis.fetch = originalFetch;
     for (const [key, value] of Object.entries(savedEnv)) value === undefined ? delete process.env[key] : process.env[key] = value;
   }
+});
+
+test('deleting meetings: trash, restore, purge, empty drafts, permissions', async () => {
+  await admin(`${api}/admin/settings`, json('PUT', { registration: true }));
+  const member = client();
+  await member(`${api}/auth/register`, json('POST', { username: 'trash-mei', password: 'password1' }));
+  const make = async body => (await (await admin(base, json('POST', body))).json()).id;
+  const ids = async c => (await (await c(base)).json()).map(m => m.id);
+
+  // An untouched "new meeting" draft is discarded without the trash; one with notes is kept.
+  assert.ok(isEmptyDraft({ status: 'draft', title: '無標題會議', notes: '  ', tags: [], participants: [], sections: [] }));
+  const blank = await make({ title: '無標題會議' });
+  assert.deepEqual(await (await admin(`${base}/${blank}?ifEmpty=1`, { method: 'DELETE' })).json(), { ok: true, purged: true });
+  assert.equal((await admin(`${base}/${blank}`)).status, 404);
+  const noted = await make({ title: '無標題會議', notes: '議程' });
+  assert.equal((await (await admin(`${base}/${noted}?ifEmpty=1`, { method: 'DELETE' })).json()).kept, true, 'a draft with notes survives');
+
+  // Only the owner (or an admin) deletes; others only ever see 404 for a trashed meeting.
+  const id = await make({ title: '要刪的會議', tags: ['回收'] }), mtg = `${base}/${id}`;
+  const share = await (await admin(`${mtg}/shares`, json('POST', { perm: 'view' }))).json();
+  const found = async () => (await (await admin(`${api}/search?q=${encodeURIComponent('tag:回收')}`)).json()).results.some(r => r.id === id);
+  assert.ok(await found());
+  assert.equal((await member(mtg, { method: 'DELETE' })).status, 403);
+  assert.equal((await admin(mtg, { method: 'DELETE' })).status, 200);
+  assert.ok(!(await ids(admin)).includes(id) && !(await ids(member)).includes(id), 'hidden from lists');
+  assert.ok(!await found(), 'hidden from search');
+  assert.equal((await member(mtg)).status, 404);
+  assert.equal((await admin(mtg)).status, 404);
+  assert.equal((await admin(mtg, json('PATCH', { title: 'x' }))).status, 404, 'no edits while trashed');
+  assert.equal((await member(`${api}/shares/${share.token}`, json('POST', {}))).status, 404, 'share links stop working');
+  const trash = await (await admin(`${base}/trash`)).json();
+  assert.deepEqual(trash.map(t => t.title), ['要刪的會議']);
+  assert.equal(new Date(trash[0].purgeAt) - new Date(trash[0].deletedAt), TRASH_DAYS * 864e5);
+  assert.deepEqual(await (await member(`${base}/trash`)).json(), [], 'the trash only lists your own meetings');
+
+  // Restore brings it back untouched; deleting from the trash removes it for good.
+  assert.equal((await admin(`${mtg}/restore`, json('POST', {}))).status, 200);
+  assert.ok((await ids(member)).includes(id));
+  assert.equal((await member(`${api}/shares/${share.token}`, json('POST', {}))).status, 200, 'share works again after restore');
+  await admin(mtg, { method: 'DELETE' });
+  assert.equal((await (await admin(`${mtg}?ifEmpty=1`, { method: 'DELETE' })).json()).kept, true, 'draft cleanup never purges the trash');
+  assert.equal((await admin(mtg, { method: 'DELETE' })).status, 200);
+  assert.equal((await admin(`${mtg}/restore`, json('POST', {}))).status, 404, 'purged meetings are gone');
+  assert.equal((await member(`${api}/shares/${share.token}`, json('POST', {}))).status, 404, 'its share links are revoked');
+
+  // After TRASH_DAYS the trash empties itself.
+  const old = await make({ title: '過期的會議' });
+  await admin(`${base}/${old}`, { method: 'DELETE' });
+  assert.equal(await purgeExpired(Date.now() + (TRASH_DAYS - 1) * 864e5), 0);
+  assert.equal(await purgeExpired(Date.now() + (TRASH_DAYS + 1) * 864e5), 1);
+  assert.deepEqual(await (await admin(`${base}/trash`)).json(), []);
 });

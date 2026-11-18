@@ -54,6 +54,17 @@
   aside a { display:flex; gap:10px; align-items:center; padding:5px 10px; margin:1px 0; border-radius:6px; text-decoration:none; color:var(--side-link); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   aside a:hover, aside a.on { background:var(--hover); color:var(--fg); }
   aside a.on { font-weight:600; }
+  .side-item { position:relative; }
+  .side-item > a { padding-right:34px; }
+  .side-more { position:absolute; right:4px; top:50%; transform:translateY(-50%); border:0; background:none; color:var(--muted); padding:0 8px; opacity:0; }
+  .side-item:hover .side-more, .side-more:focus-visible, .side-more[aria-expanded=true] { opacity:1; }
+  .side-item input { width:100%; padding:4px 8px; border:1px solid var(--accent); border-radius:6px; color:var(--fg); outline:none; }
+  .menu { position:fixed; z-index:40; min-width:180px; padding:4px; display:grid; background:var(--bg); border:1px solid var(--line); border-radius:10px; box-shadow:var(--shadow), 0 8px 24px rgba(15,15,15,.12); }
+  .menu button { border:0; background:none; text-align:left; padding:8px 12px; }
+  button.danger, .menu button.danger { color:var(--red); }
+  #toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); z-index:50; display:flex; gap:12px; align-items:center; padding:10px 16px; border-radius:10px; background:var(--fg); color:var(--bg); box-shadow:var(--shadow); max-width:calc(100vw - 32px); }
+  #toast button { background:none; color:inherit; border-color:currentColor; }
+  td.chk input, th.chk input { margin:0; }
   aside .side-h { color:var(--faint); font-size:12px; padding:20px 10px 6px; }
 
   /* Page */
@@ -268,7 +279,7 @@
   .copy-source .todo { display:block; }
   [hidden] { display:none !important; }
   @media (prefers-reduced-motion:reduce) { *, ::before, ::after { animation:none !important; transition:none !important; } }
-  @media (pointer:coarse) { button, select { min-height:40px; } aside a { padding:9px 12px; } }
+  @media (pointer:coarse) { button, select { min-height:40px; } aside a { padding:9px 12px; } .side-more { opacity:1; min-height:0; } }
   @media (max-width:700px) {
     body, body.side-collapsed { grid-template-columns:minmax(0, 1fr); }
     aside { position:fixed; inset:0 auto 0 0; width:min(280px, 85vw); z-index:30; border-right:1px solid var(--line); }
@@ -306,6 +317,7 @@
   <a href="#search" data-r="search">🔍 搜尋<span class="kbd">⌘K</span></a>
   <a href="#actions" data-r="actions">✅ 待辦事項</a>
   <a href="#people" data-r="people">👥 成員與團隊</a>
+  <a href="#trash" data-r="trash">🗑️ 垃圾桶</a>
   <div class="side-h">最近的會議</div>
   <nav id="list"></nav>
   <div class="side-h">帳號</div>
@@ -698,11 +710,96 @@ async function revokeShare(token) {
 
 async function refreshList() {
   meetings = await api('/api/meetings');
-  $('#list').innerHTML = meetings.slice(0, 30).map(m =>
-    `<a href="#${m.id}" class="${m.id === current?.id ? 'on' : ''}" title="${esc(m.title)}">📄 ${esc(m.title)}</a>`).join('');
+  $('#list').innerHTML = meetings.slice(0, 30).map(m => `<div class="side-item" data-id="${m.id}">
+    <a href="#${m.id}" class="${m.id === current?.id ? 'on' : ''}" title="${esc(m.title)}">📄 ${esc(m.title)}</a>${m.perm === 'owner'
+      ? `<button class="side-more" aria-label="${esc(m.title)} 的更多動作" aria-haspopup="menu" aria-expanded="false" onclick="sideMenu(this, '${m.id}')">⋯</button>` : ''}</div>`).join('');
 }
 
 function stop() { clearTimeout(pollTimer); current = null; }
+
+// ---- 刪除與重新命名：刪除先移到垃圾桶，30 天內可還原 ----
+function closeMenu() { document.querySelector('.menu')?.remove(); document.querySelectorAll('.side-more[aria-expanded=true]').forEach(b => b.setAttribute('aria-expanded', 'false')); }
+function sideMenu(btn, id) {
+  const open = btn.getAttribute('aria-expanded') === 'true';
+  closeMenu();
+  if (open) return;
+  const r = btn.getBoundingClientRect(), menu = Object.assign(document.createElement('div'), { className: 'menu', role: 'menu', innerHTML:
+    '<button role="menuitem" data-act="rename">✏️ 重新命名</button><button role="menuitem" class="danger" data-act="trash">🗑️ 移到垃圾桶</button>' });
+  menu.style.top = `${Math.min(r.bottom + 4, innerHeight - 100)}px`;
+  menu.style.left = `${Math.min(r.left, innerWidth - 196)}px`;
+  menu.onclick = e => { const act = e.target.closest('button')?.dataset.act; closeMenu(); if (act === 'rename') renameInSide(id); if (act === 'trash') trashMeetings([id]); };
+  menu.onkeydown = e => { if (e.key === 'Escape') { closeMenu(); btn.focus(); } };
+  btn.setAttribute('aria-expanded', 'true');
+  document.body.append(menu);
+  menu.querySelector('button').focus();
+}
+document.addEventListener('pointerdown', e => { if (!e.target.closest('.menu, .side-more')) closeMenu(); });
+function renameInSide(id) {
+  const item = document.querySelector(`.side-item[data-id="${id}"]`), m = meetings.find(x => x.id === id);
+  if (!item || !m) return;
+  item.innerHTML = `<input aria-label="會議名稱" maxlength="200" value="${esc(m.title)}">`;
+  const input = item.querySelector('input');
+  let done = false;
+  const finish = async save => {
+    if (done) return;
+    done = true;
+    const title = input.value.trim();
+    if (save && title && title !== m.title) {
+      try {
+        const updated = await api(`/api/meetings/${id}`, json('PATCH', { title }));
+        if (current?.id === id) { current = { ...current, title: updated.title }; render(current); }
+      } catch (e) { alert(`重新命名失敗：${e.message}`); }
+    }
+    refreshList();
+  };
+  input.onkeydown = e => { if (e.key === 'Enter') finish(true); if (e.key === 'Escape') finish(false); };
+  input.onblur = () => finish(true);
+  input.select();
+}
+function toast(html, ms = 8000) {
+  $('#toast')?.remove();
+  const el = Object.assign(document.createElement('div'), { id: 'toast', role: 'status', innerHTML: html });
+  document.body.append(el);
+  setTimeout(() => el.remove(), ms);
+  return el;
+}
+async function trashMeetings(ids) {
+  if (!ids.length) return;
+  if (ids.includes(current?.id) && (rec?.state === 'recording' || uploading)) return alert('請先完成錄音或上傳，再刪除這場會議。');
+  const one = meetings.find(m => m.id === ids[0])?.title ?? current?.title ?? '';
+  if (!confirm(ids.length === 1 ? `把「${one}」移到垃圾桶？30 天內可以從垃圾桶還原。` : `把 ${ids.length} 場會議移到垃圾桶？30 天內可以從垃圾桶還原。`)) return;
+  const done = [], failed = [];
+  for (const id of ids) {
+    try { await api(`/api/meetings/${id}`, { method: 'DELETE' }); done.push(id); }
+    catch (e) { failed.push(`${meetings.find(m => m.id === id)?.title ?? id}：${e.message}`); }
+  }
+  if (failed.length) alert(`以下會議沒有刪除：\n${failed.join('\n')}`);
+  if (!done.length) return;
+  if (done.includes(current?.id)) { pendingNotes.delete(current.id); location.hash = ''; }
+  else if (!location.hash.slice(1)) showDb(); else if (location.hash === '#trash') showTrash(); else refreshList();
+  const el = toast(`<span>已將${done.length === 1 ? `「${esc(meetings.find(m => m.id === done[0])?.title ?? one)}」` : ` ${done.length} 場會議`}移到垃圾桶</span><button>復原</button>`);
+  el.querySelector('button').onclick = async () => { el.remove(); await restoreMeetings(done); };
+}
+async function restoreMeetings(ids) {
+  for (const id of ids) await api(`/api/meetings/${id}/restore`, json('POST', {})).catch(e => alert(`還原失敗：${e.message}`));
+  if (location.hash === '#trash') showTrash(); else if (!location.hash.slice(1)) showDb(); else refreshList();
+}
+async function showTrash() {
+  stop();
+  await refreshList();
+  const items = await api('/api/meetings/trash');
+  page(`<div class="icon">🗑️</div><h1>垃圾桶</h1>
+    <p class="muted">刪除的會議保留 30 天，之後自動永久刪除。這裡只列出你能管理的會議。</p>
+    ${items.length ? `<div class="scroll-x"><table class="db"><thead><tr><th>Aa 名稱</th><th>刪除時間</th><th>刪除者</th><th>自動永久刪除</th><th></th></tr></thead><tbody>
+      ${items.map(t => `<tr style="cursor:default"><td class="name">📄 ${esc(t.title)}</td><td class="nowrap">${esc(dt(t.deletedAt))}</td><td>${esc(t.deletedBy)}</td><td class="nowrap">${esc(day(t.purgeAt))}</td>
+        <td class="nowrap"><button onclick="restoreMeetings(['${t.id}'])">還原</button> <button class="ghost danger" data-title="${esc(t.title)}" onclick="purgeMeeting('${t.id}', this.dataset.title)">永久刪除</button></td></tr>`).join('')}
+    </tbody></table></div>` : '<p class="muted">垃圾桶是空的。</p>'}`, true);
+}
+async function purgeMeeting(id, title) {
+  if (!confirm(`永久刪除「${title}」？錄音、逐字稿、摘要與筆記都會刪除，無法復原。`)) return;
+  try { await api(`/api/meetings/${id}`, { method: 'DELETE' }); } catch (e) { alert(e.message); }
+  showTrash();
+}
 // Suggestions for name, team, leader and tag inputs, so people pick existing values instead of retyping them.
 const opts = xs => xs.map(x => `<option value="${esc(x)}">`).join('');
 const datalists = () => `<datalist id="dl-people">${directory.people.map(p => `<option value="${esc(p.name)}">${esc(p.team)}</option>`).join('')}</datalist>
@@ -715,14 +812,17 @@ const canonList = (text, known) => String(text).split(/[,，、]/).map(x => cano
 function page(html, wide = false) { $('#main').innerHTML = `<div class="page${wide ? ' wide' : ''}">${html}${datalists()}</div>`; }
 
 // ---- 會議紀錄（資料庫表格） ----
+const pickedRows = () => [...document.querySelectorAll('.pick-row:checked')].map(c => c.value);
+function updateBulk() { const n = pickedRows().length, b = $('#bulk-trash'); b.hidden = !n; b.textContent = `🗑️ 刪除所選（${n}）`; }
 async function showDb() {
   stop();
   await refreshList();
+  const owned = meetings.some(m => m.perm === 'owner');
   page(`<div class="icon">📅</div><h1>會議紀錄</h1>
     <p class="muted">每場會議的逐字稿、AI 摘要與待辦事項。</p>
-    <div class="views"><button class="view on">▦ 全部會議</button><span class="spacer"></span><button class="primary" onclick="location.hash='new'">新增</button></div>
-    <table class="db"><thead><tr><th>Aa 名稱</th><th>🕐 時間</th><th>◉ 類型</th><th>🏷 標籤</th><th>📍 地點</th><th>👥 參與者</th><th>🏢 團隊</th><th>◎ 狀態</th><th>✅ 待辦</th></tr></thead>
-    <tbody>${meetings.map(m => `<tr onclick="location.hash='${m.id}'">
+    <div class="views"><button class="view on">▦ 全部會議</button><span class="spacer"></span><button id="bulk-trash" class="danger" hidden onclick="trashMeetings(pickedRows())"></button> <button class="primary" onclick="location.hash='new'">新增</button></div>
+    <table class="db"><thead><tr>${owned ? '<th class="chk"><input type="checkbox" aria-label="全選可刪除的會議" onchange="document.querySelectorAll(\'.pick-row\').forEach(c => { c.checked = this.checked; }); updateBulk()"></th>' : ''}<th>Aa 名稱</th><th>🕐 時間</th><th>◉ 類型</th><th>🏷 標籤</th><th>📍 地點</th><th>👥 參與者</th><th>🏢 團隊</th><th>◎ 狀態</th><th>✅ 待辦</th></tr></thead>
+    <tbody>${meetings.map(m => `<tr onclick="location.hash='${m.id}'">${owned ? `<td class="chk" onclick="event.stopPropagation()">${m.perm === 'owner' ? `<input type="checkbox" class="pick-row" value="${m.id}" aria-label="選取 ${esc(m.title)}" onchange="updateBulk()">` : ''}</td>` : ''}
       <td class="name">${m.access === 'private' ? '🔒' : '📄'} ${esc(m.title)}${m.brief ? `<div class="muted">${esc(m.brief)}</div>` : ''}</td><td class="nowrap">${esc(whenLabel(m))}</td>
       <td>${tag(TYPES[m.template] ?? TYPES.auto)}</td><td>${m.tags.map(tagLink).join('')}</td><td>${esc(m.location)}</td>
       <td>${m.attendees.map(a => tag([a, 'gray'])).join('')}</td><td>${m.teams.map(teamLink).join('')}</td><td>${tag(STATUS[m.status] ?? [m.status, 'gray'])}</td>
@@ -982,10 +1082,11 @@ async function showNew() {
   if (me.role === 'readonly') return page('<p class="muted">唯讀帳號不能建立會議。</p>');
   const m = await api('/api/meetings', json('POST', { title: '無標題會議', lang: 'zh-TW', scheduledAt: localInput(new Date()), agentId: 'general' }));
   focusTitle = true; // a new meeting starts by naming it
+  draftId = m.id; // discarded on leave if still untouched; the server decides what counts as untouched
   location.hash = `${m.id}:notes`;
 }
 
-let uploading = false, selectedSection = null, notesPreview = false, focusTitle = false, saveState = '';
+let uploading = false, selectedSection = null, notesPreview = false, focusTitle = false, saveState = '', draftId = null;
 async function uploadFiles(files) {
   if (!files.length || uploading) return;
   const id = current.id;
@@ -1583,7 +1684,7 @@ function render(m) {
       ${(m.usage ?? []).length ? prop('📊', 'AI 用量', `${usageLine(totalOf(m.usage))}<details><summary class="muted">每次呼叫明細</summary>${usageRows([...m.usage].reverse())}</details>`) : ''}
       ${prop('🔒', '權限', m.perm === 'owner'
         ? `<select aria-label="其他人的權限" data-keep onchange="patch({ access: this.value })">${ACCESS.map(([v, t]) => `<option value="${v}" ${m.access === v ? 'selected' : ''}>${t}</option>`).join('')}</select>
-           <button class="ghost" data-keep onclick="openShares()">🔗 分享連結</button><div id="sharePanel"></div>`
+           <button class="ghost" data-keep onclick="openShares()">🔗 分享連結</button><button class="ghost danger" onclick="trashMeetings([current.id])">🗑️ 移到垃圾桶</button><div id="sharePanel"></div>`
         : `你的權限：${tag([PERMS[m.perm], 'blue'])}`)}
     </div>
     <div class="ai-block">
@@ -1889,6 +1990,13 @@ async function route() {
   }
   if (!me) return showLogin();
   const h = location.hash.slice(1);
+  if (draftId && h.split(':')[0] !== draftId) {
+    const id = draftId;
+    draftId = null;
+    // Awaited so the next page never lists the draft that is being discarded.
+    const r = uploading ? null : await api(`/api/meetings/${id}?ifEmpty=1`, { method: 'DELETE' }).catch(() => null);
+    if (r?.purged) refreshList();
+  }
   if (h.startsWith('share/')) { // opening a share link grants its permission, then shows the meeting
     try { location.hash = (await api(`/api/shares/${encodeURIComponent(h.slice(6))}`, json('POST', {}))).id; }
     catch (e) { page(`<p class="err">${esc(e.message)}</p>`); }
@@ -1896,15 +2004,16 @@ async function route() {
   }
   const [id, sub] = h.split(':');
   $('#main').scrollTop = 0;
-  const r = h.startsWith('search') ? 'search' : ['new', 'actions', 'people', 'me', 'admin'].includes(h) ? h : h ? '' : 'db';
+  const r = h.startsWith('search') ? 'search' : ['new', 'actions', 'people', 'trash', 'me', 'admin'].includes(h) ? h : h ? '' : 'db';
   document.querySelectorAll('aside [data-r]').forEach(a => a.classList.toggle('on', a.dataset.r === r));
   const go = r === 'search' ? showSearch(decodeURIComponent(h.slice('search='.length)))
-    : h === 'new' ? showNew() : h === 'actions' ? showActions() : h === 'people' ? showPeople() : h === 'me' ? showMe() : h === 'admin' ? showAdmin()
+    : h === 'new' ? showNew() : h === 'actions' ? showActions() : h === 'trash' ? showTrash() : h === 'people' ? showPeople() : h === 'me' ? showMe() : h === 'admin' ? showAdmin()
     : /^[0-9a-f-]{36}$/.test(id) ? openMeeting(id).then(() => sub?.startsWith('seg-') ? seek(+sub.slice(4)) : sub === 'notes' && setTab('notes'))
     : !h ? showDb() : null;
   Promise.resolve(go).catch(e => page(`<p class="err">${esc(e.message)}</p>`));
 }
 window.addEventListener('hashchange', route);
+window.addEventListener('pagehide', () => { if (draftId && !pendingNotes.size && !uploading) fetch(`/api/meetings/${draftId}?ifEmpty=1`, { method: 'DELETE', keepalive: true }); });
 window.addEventListener('beforeunload', e => {
   if (pendingNotes.size || rec?.state === 'recording' || uploading) { e.preventDefault(); e.returnValue = ''; }
 });

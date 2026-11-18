@@ -240,7 +240,7 @@ test('failed note saves retain the pending draft and still allow navigation', as
   const warnings = [], pendingNotes = new Map([['meeting', '# unsaved']]);
   const context = vm.createContext({
     pendingNotes, saveNotes: async () => { throw Error('offline'); }, alert: text => warnings.push(text),
-    rec: null, me: {}, location: { hash: '#actions' }, $: () => ({}),
+    rec: null, me: {}, draftId: null, uploading: false, location: { hash: '#actions' }, $: () => ({}),
     document: { querySelectorAll: () => [] }, showActions: () => { opened++; },
   });
   vm.runInContext(script.slice(script.indexOf('async function route()'), script.indexOf("window.addEventListener('hashchange'")), context);
@@ -248,6 +248,22 @@ test('failed note saves retain the pending draft and still allow navigation', as
   assert.equal(opened, 1);
   assert.equal(pendingNotes.get('meeting'), '# unsaved');
   assert.match(warnings[0], /內容仍暫存在此分頁/);
+});
+
+test('leaving an untouched new meeting asks the server to discard it, once', async () => {
+  const calls = [], context = vm.createContext({
+    pendingNotes: new Map(), saveNotes: async () => {}, rec: null, me: {}, draftId: 'draft', uploading: false, location: { hash: '#actions' }, $: () => ({}),
+    document: { querySelectorAll: () => [] }, showActions: () => {}, refreshList: () => {},
+    api: async (url, opts) => { calls.push([url, opts.method]); return { ok: true, purged: true }; },
+  });
+  vm.runInContext(script.slice(script.indexOf('async function route()'), script.indexOf("window.addEventListener('hashchange'")), context);
+  context.location.hash = '#draft:notes';
+  await context.route();
+  assert.deepEqual(calls, [], 'staying on the draft keeps it');
+  context.location.hash = '#actions';
+  await context.route();
+  await context.route();
+  assert.deepEqual(calls, [['/api/meetings/draft?ifEmpty=1', 'DELETE']]);
 });
 
 test('transcript copy follows section order, speaker names and visible text mode', () => {
