@@ -14,7 +14,7 @@
 - `openrouterKey()`：`OPENROUTER_API_KEY` 定義（含空字串）就用它，否則每次讀 `~/.config/openrouter/key`；空字串＝停用，測試靠這點避免呼叫真 API。
 - `POST /:id/summarize` 以排隊的 `update()` 預留處理狀態，同時啟動會回 409。`retranscribe: true` 才將所有 section 標為未轉錄，清空既有逐字稿並重跑；一般處理重用已轉錄部分。
 - 講者與參與者：PATCH 的 `speakers` 經 `cleanSpeakers()`；`segSpeakers` 經 `reassignSpeakers()` 改段落講者。`participants` 經 `cleanMeta()`，`attendees()` 合併講者與手動參與者，摘要提示列出全部參與者。變更後的過期追蹤見下方多 section 規則，不自動重跑。
-- 摘要完成後 `parseActions(summary, 現存 actions)` 寫入 `actions`；`done` 只靠文字完全相同保留。`withActions()` 讓 GET/PATCH/list 對舊會議即時推導。PATCH 的 `actions` 經 `cleanActions()` 清理。
+- 摘要完成後用 `parseActions(summary, cur.actions)` 寫入 `actions`，必須在 `update()` 內使用最新資料。以事項文字及負責人配對，保留舊順序與完成狀態，引用用新摘要；新增附加、移除不補回、換負責人不繼承原完成狀態。重複項目先配相同引用，再依出現順序逐筆配；無 owner 的舊資料僅沿用按文字繼承完成狀態的相容行為。`withActions()` 讓 GET/PATCH/list 對舊會議即時推導，PATCH 仍經 `cleanActions()`。
 - 讀取一律經 `view()`／`loadAll()`：`withDefaults()` 補舊會議欄位，`enrich()` 依 `data/directory.json` 補 `people`、`teams`、`actions[].team/leader`；這些衍生欄位不得寫回 `meeting.json`。
 - 搜尋 `searchMeetings()` 為純函式（輸入已 enrich 的會議），`normQ()`＝NFKC＋小寫＋`s2twp`；注意 `s2twp` 會把「台」轉成「臺」，查詢與資料兩邊都轉，所以仍能互相比對。
 - 寫入：`update(id, patch)` 每場會議排隊；依現有內容計算的改動傳函式 `update(id, cur => ({...}))`，不要先 `load()` 再傳結果；暫存檔名每次不同。
@@ -36,3 +36,10 @@
 - `[transcribe]` 記開始／完成／失敗與安全的請求統計。HTTP、斷線與 JSON 解析失敗都進 `log`；正式流程存 `meeting.usage`，可用時包含 `httpStatus`／`requestId`，另記 `audioBytes`／`phraseCount`／`language`／`zdr`。排查訊息經 `meeting.error` 顯示在網頁；診斷結果不存進會議用量。
 - 不回傳或記錄上游原始 body，避免洩漏 key、音訊或術語。429 不足以分辨 key／帳戶／IP／供應商共享容量限流。轉錄沒有自動重試，勿與 `llm()` 的重試混淆。
 - 轉錄 API 的術語上限為 200（D-003 補充實測，200 成功／201 回 400）。`requestTranscription()` 取前 200 個，維持會議術語優先的順序；超量以 `omittedPhraseCount`／`warning` 記入 log，並顯示在診斷與會議用量明細。不要降低 `mergeTerms()` 的 500 個上限，完整合併清單仍供校對使用；不刪學習資料。
+
+## 私人檢討與模型相容性
+
+- `reviewContext()` 只取目前會議的筆記、摘要、待辦、關鍵字、section 與逐字稿；`runReview()` 加上本人對話，沿用 `pickAI()`、`llm()` 與 context window 檢查。團隊知識只作背景，回答區分事實、推測及建議，不寫回正式摘要或待辦。
+- `reviewContextHash()` 不含用量與儲存時間。`appendReviewTurn()` 在會議寫入佇列內重新檢查 view 與內容版本；處理中變更回 409，不保存可能錯指段落的回答。`safeReviewUsage()` 過濾共享用量的私人內容及上游錯誤回顯；權限與私人儲存見 `mem:backend/auth`。
+- 同人同場提問以 `reviewInFlight` 鎖定，模型呼叫不持有儲存鎖；清除與提問不得交錯造成舊回答復活。對話上限明確回錯，不默默裁切歷史。
+- Anthropic SDK 更新後仍保留 `anthropic-version: 2023-06-01` 與 API key 的 `x-api-key`；只有 auth token 時使用 Bearer。停用選用 OpenTelemetry；缺少金鑰直接報錯，不啟動 SDK 自動憑證搜尋。
