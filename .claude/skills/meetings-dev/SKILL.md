@@ -1,6 +1,6 @@
 ---
 name: meetings-dev
-description: Develop, fix, or maintain the notion-meetings app (server.js routes and pipeline, auth.js accounts and permissions, ai.js models and agents, public/index.html UI, keys). Use before changing code here, when a transcript, summary, permission or login looks wrong, or when a provider, model ID, agent, or key changes.
+description: Develop or debug notion-meetings routes, UI and permissions. Use before changing transcription, summaries, private review, image attachments, Magpie meeting diagrams, models, agents, keys or releases.
 ---
 
 # notion-meetings 開發與維護
@@ -39,6 +39,7 @@ description: Develop, fix, or maintain the notion-meetings app (server.js routes
 - 改到轉錄、術語、校對或講者建議時，除了 `eval/e2e.py`，若有凍結的 benchmark 會議，也要在管理後台執行一次 benchmark，分數不能下降。比較分數前，先看每次執行的設定指紋（轉錄模型、校對模型、術語雜湊）是否相同。
 - Benchmark 的講者正確率只計實際重疊而且配對正確的時間，配對用匈牙利演算法（`bestAssignment()`），跨 15 分鐘邊界的發言要切開。時間軸要切成互不重疊的時間片，重疊或重複的輸出片段只能算一次。改 `speakerAccuracy()` 時，`server.test.js` 裡的「1 秒覆蓋 10 秒＝10%」「跨視窗」「最佳配對 61.1%」「兩個標籤重疊＝50%、漏 50%」「重複片段不超過 100%」都要通過。
 - 新的評測結果（模型、端點、組合）要加進 `docs/research/2026-10-21-benchmark-standards.md` 的準確度總表；README 的模型搭配表也要跟著更新。
+- 會議圖出圖：先讀 [會議圖規格](../../../docs/architecture.md#會議圖)。兩個入口共用 `MEETING_DIAGRAM_PROMPT`。圖片生成走 Magpie 的圖片 API，附件辨識仍走 `llm()`。用合成摘要和合成私人檢討分別實測，確認模型 ID、可開啟的 PNG，以及另一個帳號指定私人回合會收到 404。單元測試使用替身端點。
 
 ## 建置與發版
 

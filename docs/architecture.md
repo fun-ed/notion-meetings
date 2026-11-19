@@ -64,9 +64,23 @@ server.js  create() / appendSection()
 
 每則回答保留生成時的會議內容雜湊。會議內容在模型處理中改變時拒絕保存並提示重新提問；已保存回答若與目前內容版本不同，介面顯示過期提示，引用維持文字而不跳轉，避免 section 重新排序後指向錯誤發言。用量與儲存時間不影響內容版本。
 
-前端將提示詞設定、完整問題與回答回合分別收合；問題與回答均使用安全 Markdown 顯示並停用圖片載入。預設展開最新回合，使用者的展開選擇只留在目前帳號的前端狀態，不寫進會議或私人對話檔。頁籤以明顯選取樣式及方向鍵、Home／End 切換。
+前端將提示詞設定、完整問題與回答回合分別收合。問題與回答使用安全 Markdown 顯示，圖片只顯示使用者附加並已驗證格式的 Base64 資料。預設展開最新回合，使用者的展開選擇只留在目前帳號的前端狀態，不寫進會議或私人對話檔。頁籤以明顯選取樣式及方向鍵、Home／End 切換。
 
 會議底部待辦沿用 `actions` 陣列，分類使用既有 `owner`／`done`，不新增分類欄位。拖曳或上下移動會經既有 PATCH 儲存整個陣列的順序作為優先序，仍需 edit；view／readonly 可分類檢視，不能調整順序。儲存失敗保留原順序，儲存中鎖定重排與勾選，回應不覆蓋已切換到的會議。更新摘要時，`parseActions()` 依事項文字與負責人對應，保留既有順序及完成狀態，引用採用新摘要；新增事項依摘要順序附加，已移除的事項不保留。
+
+## 會議圖片
+
+摘要與筆記可選檔、貼上剪貼簿圖片或貼上 Base64（含 data URL）。兩個頁籤各可保存四張 PNG、JPEG 或 WebP，每張上限 700 KB。圖片與辨識結果跟隨會議分享，新增、移除及辨識均需 edit 權限。重新產生摘要會保留附件。使用者按「辨識圖片」後，`llm()` 依目前會議模型的供應商送出對應的圖片內容區塊，辨識結果存回原附件。
+
+會議檢討每次可附一張圖片，圖片只隨該次提問送出，並保存在本人問答回合的 `image` 欄位。沒有文字問題時可直接辨識。其他使用者無法從共享會議或私人問答 API 讀取該附件。私人對話的圖片 Base64 合計上限為 4,000,000 字元。
+
+## 會議圖
+
+摘要與私人檢討回合各有「產生會議圖」，需要會議 view 權限。摘要出圖使用目前摘要，檢討出圖使用登入者目前選定回合的問題與回答。兩者都帶入會議標題，檢討回合中的提示詞與原始附件不送出。
+
+`server.js` 的 `MEETING_DIAGRAM_PROMPT` 是兩個入口共用的內建提示詞。依來源選擇流程圖、時間軸或主題分組，最多六個重點，保留原文的術語、數字和已確認的決議。使用者只需選擇出圖來源，介面不提供提示詞輸入。
+
+伺服器在 Magpie 模式下呼叫本機 `POST /v1/images/generations`，使用 `codex/gpt-image-2.6-flare` 回傳 PNG。公司 LiteLLM 模式不會轉送會議內容給 Magpie。圖像在目前對話框預覽，可下載 PNG 到本機。關閉預覽後釋放圖片，生成圖不寫回會議資料或私人問答。
 
 ## 學習迴圈（D-020）
 
@@ -123,11 +137,12 @@ summarizing：summarize() 與 suggestSpeakers() 同時執行；建議失敗不�
 | `benchmarkAt` | 凍結為 benchmark 的時間；參考答案在同一資料夾的 `reference.json` |
 | `notes` | 使用者手寫 Markdown 筆記，可在沒有媒體的草稿中儲存；摘要時一起參考 |
 | `summary`, `template`, `instructions`, `outputLang` | 摘要內容與產生設定；`template` 也是介面上的「類型」 |
+| `images[]` | 共享 Base64 圖片 `{id, field: summary｜notes, mime, data, description?}`。辨識結果存在 `description`，和 AI 摘要分開保存 |
 | `scheduledAt`, `location`, `brief`, `tags` | 使用者設定的會議時間（`YYYY-MM-DDTHH:mm`，本機時間）、地點、一句話摘要、標籤；由 `cleanMeta()` 驗證，格式不對就存成空值 |
 | `ownerId`, `access`, `grants[]` | 擁有者、其他登入者的權限（private／view／comment／edit）、分享連結授權 `{userId, perm, token}` |
 | `comments[]` | `{id, userId, name, text, seg, createdAt}` |
 | `deletedAt`, `deletedBy` | 移到垃圾桶的時間與操作者（D-030）；有值時會議不出現在列表、搜尋、待辦，所有路由回 404，只有擁有者能還原或永久刪除 |
-| `usage[]` | 每次 AI 呼叫：`{kind: transcribe｜correct｜summary, provider, model, label, effort, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, audioSeconds, costUsd, ms, at, error?, rejected?}`；`rejected` 是術語校對有改動被還原的行數（D-025）；一次處理的紀錄在 `processMeeting` 結束（含失敗）時寫入 |
+| `usage[]` | 每次 AI 呼叫的用量。`kind` 包含 `transcribe`、`correct`、`summary`、`review`、`image` 等。欄位包含 `provider`、`model`、`label`、`effort`、token 數、`costUsd`、`ms`、`at` 和選填的 `error`。術語校對另記被還原的行數 `rejected`（D-025） |
 | `agentId`, `summaryBy` | 會議的 Agent；產生摘要的 Agent、模型、effort、時間 |
 | `actions[]` | `{text, owner, done, cite}`，陣列順序為優先序。摘要完成時由 `parseActions()` 解析 `- [ ] 事項 — 負責人 [n]`；重跑時以文字與負責人對應，保留順序及完成狀態，更新引用，新增事項附加於後。相同事項重複時先對應未變的引用，否則依出現順序逐筆對應。沒有負責人欄位的舊資料僅沿用原本按文字繼承完成狀態的相容行為。舊會議沒有 actions 時，讀取時才從摘要推導 |
 
@@ -147,7 +162,9 @@ summarizing：summarize() 與 suggestSpeakers() 同時執行；建議失敗不�
 | `GET /api/admin`（含 `usage`：total、byKind、byModel、byDay）；`PUT /api/admin/settings`、`/api/admin/users/:id`；`POST /api/admin/users/:id/reset-password` | 管理後台（admin） |
 | `GET /api/ai`；`PUT /api/admin/ai`；`POST /api/admin/ai/models/:id/test` | 模型與 Agent 設定（非 admin 只看到啟用的 Agent 名稱） |
 | `GET`／`PUT /api/review-prompts` | 讀取內建提示詞與本人 custom 清單；PUT `{custom:[{id,title,prompt}]}` 只修改本人版本，內建提示詞不變 |
-| `GET`／`POST`／`DELETE /api/meetings/:id/review` | 私人 Q&A；GET 回本人 messages，POST `{question}` 依會議與本人對話回答，DELETE 清除本人對話。均需 view，併發提問回 409 |
+| `GET`／`POST`／`DELETE /api/meetings/:id/review` | 私人 Q&A。GET 回本人 messages，POST `{question, image?}` 依會議與本人對話回答，`image` 接收 Base64 或 data URL。DELETE 清除本人對話。均需 view，併發提問回 409 |
+| `POST /api/meetings/:id/images`、`POST`／`DELETE /api/meetings/:id/images?id=<imageId>` | 插入 `{field, image}`、辨識指定圖片或移除。均需 edit。辨識使用會議的模型，結果跟隨圖片保存 |
+| `POST /api/meetings/:id/diagram` | `{}` 以摘要出圖，`{turnId}` 以本人指定的私人檢討出圖。需 view，成功回傳 `image/png`，同帳號同時產生另一張回 409 |
 | `POST`／`GET /api/meetings/:id/shares`；`POST`／`DELETE /api/shares/:token` | 建立、列出、開啟、撤銷分享連結 |
 | `POST`／`DELETE /api/meetings/:id/comments` | 留言（需 comment 權限；刪除限本人或擁有者） |
 | `GET /api/search?q=` | 搜尋，回傳 `{terms, results[]}`；語法與計分見 D-011 |

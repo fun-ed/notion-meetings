@@ -272,6 +272,19 @@
   .markdown th, .markdown td { border:1px solid var(--line); padding:6px 10px; }
   .markdown th { background:var(--side); font-weight:600; }
   .markdown img { max-width:100%; height:auto; }
+  .meeting-image { margin:16px 0; padding:12px 0; border-top:1px solid var(--line); }
+  .meeting-image img { display:block; max-height:420px; object-fit:contain; object-position:left; }
+  .meeting-image .row { flex-wrap:wrap; margin-top:8px; }
+  #image-dialog { width:min(460px, calc(100% - 32px)); padding:20px; border:1px solid var(--line); border-radius:12px; background:var(--bg); color:var(--fg); }
+  #image-dialog form, #image-dialog label { display:grid; gap:8px; }
+  #image-dialog form { gap:16px; }
+  #image-dialog input, #image-dialog textarea { width:100%; min-width:0; }
+  #image-dialog textarea { padding:8px; border:1px solid var(--line); resize:vertical; }
+  #image-dialog :is(input, textarea):focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  #diagram-dialog { width:min(900px, calc(100% - 32px)); max-height:calc(100% - 32px); padding:20px; border:1px solid var(--line); border-radius:12px; background:var(--bg); color:var(--fg); }
+  #diagram-dialog img { display:block; width:100%; max-height:65vh; object-fit:contain; margin:16px 0; }
+  #diagram-dialog img[hidden], #diagram-download[hidden] { display:none; }
+  #diagram-dialog .row { flex-wrap:wrap; justify-content:flex-end; }
   .markdown li.markdown-task { list-style:none; }
   .markdown input[type=checkbox] { margin-right:6px; }
   .notes-tools button:focus-visible, .section-row button:focus-visible, .section-row input:focus-visible, .notes:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
@@ -327,6 +340,25 @@
 <div id="resizer" title="拖曳調整寬度，雙擊恢復預設" aria-hidden="true"></div>
 <button id="side-open" onclick="toggleSide(false)" title="展開側欄（⌘\）" aria-label="展開側欄">»</button>
 <main id="main"></main>
+<dialog id="image-dialog" aria-labelledby="image-dialog-title" onpaste="pasteMeetingImage(event)" onclose="this.querySelector('form').reset(); clipboardImage = null" oncancel="if (this.querySelector('[type=submit]').disabled) event.preventDefault()">
+  <form onsubmit="submitMeetingImage(event)">
+    <strong id="image-dialog-title">插入圖片</strong>
+    <label>選擇圖片<input type="file" accept="image/png,image/jpeg,image/webp" id="image-file" onchange="$('#image-base64').value = ''"></label>
+    <label>或貼上 Base64<textarea id="image-base64" rows="3" oninput="$('#image-file').value = ''; clipboardImage = null"></textarea></label>
+    <span class="muted">支援 PNG、JPEG、WebP，每張最多 700 KB。也可以直接貼上剪貼簿中的圖片。</span>
+    <span id="image-dialog-status" role="status" class="muted"></span>
+    <div class="row"><button type="button" onclick="$('#image-dialog').close()">取消</button><button class="primary" type="submit">插入</button></div>
+  </form>
+</dialog>
+<dialog id="diagram-dialog" aria-labelledby="diagram-title" onclose="if (!this.open) resetMeetingDiagram(this)">
+  <strong id="diagram-title">會議圖</strong>
+  <p id="diagram-status" role="status" class="muted"></p>
+  <img id="diagram-preview" alt="AI 依會議內容產生的會議圖" hidden>
+  <form method="dialog" class="row">
+    <button autofocus>關閉</button>
+    <a id="diagram-download" download hidden>下載 PNG</a>
+  </form>
+</dialog>
 
 <script>
 const $ = s => document.querySelector(s);
@@ -359,7 +391,7 @@ const whenLabel = m => m.scheduledAt ? m.scheduledAt.replace('T', ' ').replaceAl
 const allTags = () => [...new Set(meetings.flatMap(m => m.tags))].sort();
 const num = n => Math.round(n ?? 0).toLocaleString();
 const secs = ms => `${((ms ?? 0) / 1000).toFixed(1)} 秒`;
-const KIND = { transcribe: '轉錄', correct: '術語校對', summary: '摘要', review: '會議檢討', speakers: '講者建議', test: '連線測試' };
+const KIND = { transcribe: '轉錄', correct: '術語校對', summary: '摘要', review: '會議檢討', image: '圖片辨識', speakers: '講者建議', test: '連線測試' };
 const usd = n => n ? `$${n.toFixed(4)}` : '';
 // Anthropic's input_tokens excludes cached input; the real prompt size is input + cache read + cache write.
 const inTotal = e => (e.inputTokens ?? 0) + (e.cacheReadTokens ?? 0) + (e.cacheWriteTokens ?? 0);
@@ -382,6 +414,10 @@ function resetReviewData(accountId = null) {
   reviewStates.clear();
   reviewPromptsCache = reviewPromptsUserId = reviewPromptRequest = null;
   reviewAccountId = accountId;
+  if ($('#image-dialog').open) $('#image-dialog').close();
+  const diagram = $('#diagram-dialog');
+  if (diagram.open) diagram.close();
+  resetMeetingDiagram(diagram);
 }
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const rank = level => ['none', 'view', 'comment', 'edit', 'owner'].indexOf(level);
@@ -390,12 +426,14 @@ const ROLES = { admin: '管理員', member: '成員', readonly: '唯讀' };
 const ACCESS = [['private', '只有我（與管理員）'], ['view', '所有登入者可檢視'], ['comment', '所有登入者可留言'], ['edit', '所有登入者可編輯']];
 const PERMS = { view: '檢視', comment: '留言', edit: '編輯', owner: '擁有者' };
 
-async function api(path, opts = {}) {
+async function api(path, opts = {}, response = 'json') {
   const res = await fetch(path, opts);
+  if (res.ok && response === 'png' && res.headers.get('Content-Type') === 'image/png') return res.blob();
   const body = await res.json();
   // Expired or missing session: back to the login screen (the auth endpoints report their own errors).
   if (res.status === 401 && !path.startsWith('/api/auth/')) { me = null; resetReviewData(); showLogin('login'); }
   if (!res.ok) { const error = new Error(body.error || res.statusText); error.status = res.status; throw error; }
+  if (response === 'png') throw new Error('伺服器未回傳 PNG 圖片');
   return body;
 }
 
@@ -1032,6 +1070,154 @@ function markdown(text, inline = false, allowImages = true) {
   return box.innerHTML;
 }
 
+const IMAGE_FORMATS = ['image/png', 'image/jpeg', 'image/webp'];
+const IMAGE_MAX_BYTES = 700 * 1024;
+let imageTarget, clipboardImage;
+
+function openImageDialog(field) {
+  const dialog = $('#image-dialog');
+  imageTarget = { field, id: current.id, userId: me.id, epoch: reviewEpoch };
+  clipboardImage = null;
+  dialog.querySelector('form').reset();
+  $('#image-dialog-status').textContent = '';
+  dialog.showModal();
+}
+
+function pasteMeetingImage(event) {
+  const file = [...(event.clipboardData?.files ?? [])].find(item => item.type.startsWith('image/'));
+  if (!file || $('#image-dialog button[type=submit]').disabled) return;
+  event.preventDefault();
+  clipboardImage = file;
+  $('#image-file').value = $('#image-base64').value = '';
+  $('#image-dialog-status').textContent = '已貼上圖片';
+}
+
+async function imageSource(file, value) {
+  if (file && file.size > IMAGE_MAX_BYTES) throw new Error('單張圖片上限為 700 KB');
+  const input = file ? await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('無法讀取圖片'));
+    reader.readAsDataURL(file);
+  }) : value.trim();
+  const prefix = /^data:([^;,]+);base64,/i.exec(input);
+  const data = input.slice(prefix?.[0].length ?? 0).replace(/\s/g, '');
+  if (data.length > Math.ceil(IMAGE_MAX_BYTES / 3) * 4) throw new Error('單張圖片上限為 700 KB');
+  let bytes;
+  try { bytes = atob(data); } catch { throw new Error('Base64 圖片格式錯誤'); }
+  if (bytes.length > IMAGE_MAX_BYTES) throw new Error('單張圖片上限為 700 KB');
+  const mime = bytes.startsWith('\x89PNG\r\n\x1a\n') ? 'image/png'
+    : bytes.startsWith('\xff\xd8\xff') ? 'image/jpeg'
+    : bytes.startsWith('RIFF') && bytes.slice(8, 12) === 'WEBP' ? 'image/webp' : '';
+  if (!mime || (prefix && mime !== prefix[1].toLowerCase() && prefix[1] !== 'application/octet-stream')) throw new Error('請使用 PNG、JPEG 或 WebP 圖片');
+  const source = `data:${mime};base64,${btoa(bytes)}`;
+  const preview = new Image();
+  preview.src = source;
+  await preview.decode().catch(() => { throw new Error('無法開啟圖片，請確認檔案完整'); });
+  return source;
+}
+
+async function submitMeetingImage(event) {
+  event.preventDefault();
+  const dialog = $('#image-dialog'), form = event.currentTarget;
+  const button = form.querySelector('[type=submit]'), cancel = form.querySelector('[type=button]'), status = $('#image-dialog-status');
+  if (button.disabled) return;
+  const target = imageTarget, { field, id, userId, epoch } = target;
+  button.disabled = cancel.disabled = true;
+  status.textContent = '正在讀取圖片…';
+  try {
+    const source = await imageSource($('#image-file').files[0] ?? clipboardImage, $('#image-base64').value);
+    if (!sameReviewSession(userId, epoch) || current?.id !== id || imageTarget !== target) return dialog.close();
+    if (field === 'review') {
+      reviewState(id).image = source;
+    } else {
+      status.textContent = '正在儲存圖片…';
+      const { image } = await api(`/api/meetings/${id}/images`, json('POST', { field, image: source }));
+      if (!sameReviewSession(userId, epoch) || current?.id !== id) return dialog.close();
+      current.images = [...(current.images ?? []).filter(item => item.id !== image.id), image];
+    }
+    dialog.close();
+    render(current);
+    document.getElementById(`insert-image-${field}`)?.focus();
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    button.disabled = cancel.disabled = false;
+  }
+}
+
+const attachedImage = image => IMAGE_FORMATS.includes(image?.mime) && typeof image.data === 'string' && /^[A-Za-z0-9+/]+={0,2}$/.test(image.data)
+  ? `<img src="data:${image.mime};base64,${image.data}" alt="附加圖片" loading="lazy">` : '';
+const insertImageButton = (field, label = '插入圖片', disabled = false) =>
+  `<button id="insert-image-${field}" onclick="openImageDialog('${field}')" ${disabled ? 'disabled' : ''}>${label}</button>`;
+
+function meetingImages(m, field, canEdit) {
+  return (m.images ?? []).filter(image => image.field === field).map(image => `<figure class="meeting-image markdown">
+    ${attachedImage(image)}
+    ${image.description ? `<figcaption>${markdown(image.description, false, false)}</figcaption>` : ''}
+    ${canEdit ? `<div class="row"><button data-image="${esc(image.id)}" onclick="changeMeetingImage(this, 'POST')">${image.description ? '重新辨識' : '辨識圖片'}</button>
+      <button data-image="${esc(image.id)}" onclick="changeMeetingImage(this, 'DELETE')">移除圖片</button>
+      <span class="muted" role="status"></span></div>` : ''}</figure>`).join('');
+}
+
+async function changeMeetingImage(button, method) {
+  const { id } = current, userId = me.id, epoch = reviewEpoch, imageId = button.dataset.image;
+  if (method === 'DELETE' && !confirm('移除這張圖片和辨識結果？')) return;
+  const status = button.parentElement.querySelector('[role=status]');
+  button.disabled = true;
+  status.textContent = method === 'POST' ? '正在以會議模型辨識…' : '正在移除圖片…';
+  try {
+    const { image } = await api(`/api/meetings/${id}/images?id=${encodeURIComponent(imageId)}`, { method });
+    if (!sameReviewSession(userId, epoch) || current?.id !== id) return;
+    current.images = (current.images ?? []).flatMap(item => item.id !== imageId ? [item] : image ? [image] : []);
+    if (button.isConnected) {
+      render(current);
+      (document.querySelector(`button[data-image="${CSS.escape(imageId)}"]`) ?? document.getElementById(`insert-image-${tab}`))?.focus();
+    } else if (['summary', 'notes'].includes(tab)) render(current);
+  } catch (error) {
+    if (sameReviewSession(userId, epoch) && current?.id === id) {
+      if (status.isConnected) status.textContent = error.message;
+      else alert(error.message);
+    }
+  } finally { button.disabled = false; }
+}
+
+let diagramRequest;
+
+function resetMeetingDiagram(dialog) {
+  diagramRequest = null;
+  const preview = $('#diagram-preview'), download = $('#diagram-download');
+  if (download.hasAttribute('href')) URL.revokeObjectURL(download.href);
+  for (const [element, attribute] of [[preview, 'src'], [download, 'href']]) {
+    element.hidden = true;
+    element.removeAttribute(attribute);
+  }
+  delete dialog.dataset.meeting;
+}
+
+async function createMeetingDiagram(button) {
+  const { id } = current, userId = me.id, epoch = reviewEpoch;
+  const dialog = $('#diagram-dialog'), preview = $('#diagram-preview'), download = $('#diagram-download'), status = $('#diagram-status');
+  const turnId = button.dataset.turn;
+  resetMeetingDiagram(dialog);
+  dialog.dataset.meeting = id;
+  const request = diagramRequest = {};
+  $('#diagram-title').textContent = turnId ? '會議檢討圖' : '會議摘要圖';
+  status.textContent = '正在使用 Magpie 產生圖片，可能需要幾分鐘…';
+  dialog.showModal();
+  const valid = () => diagramRequest === request && sameReviewSession(userId, epoch) && current?.id === id && dialog.open;
+  try {
+    const image = await api(`/api/meetings/${encodeURIComponent(id)}/diagram`, json('POST', turnId ? { turnId } : {}), 'png');
+    if (!valid()) return;
+    download.href = preview.src = URL.createObjectURL(image);
+    download.download = turnId ? '會議檢討圖.png' : '會議摘要圖.png';
+    preview.hidden = download.hidden = false;
+    status.textContent = '圖片已產生，下載前請核對圖中文字與決議。';
+  } catch (error) {
+    if (valid()) status.textContent = error.message;
+  }
+}
+
 const pendingNotes = new Map();
 let notesTimer, notesWrites = Promise.resolve();
 function editNotes(value) {
@@ -1071,11 +1257,13 @@ function saveNotes() {
 function notesEditor(m, canEdit) {
   return `<div class="notes-tools"><span>我的筆記</span><span class="muted">支援 Markdown</span><span class="spacer"></span>
     <span id="copy-status" class="muted" role="status"></span><button id="copy-current" data-keep data-copy-kind="notes" onclick="copyContent('notes')" ${m.notes?.trim() ? '' : 'disabled'}>複製筆記</button>
+    ${canEdit ? insertImageButton('notes') : ''}
     ${canEdit ? `<button data-keep onclick="notesPreview = !notesPreview; render(current)">${notesPreview ? '編輯' : '預覽'}</button>` : ''}
     ${canEdit ? '<button title="筆記也會自動儲存" onclick="saveNotes().catch(e => alert(e.message))">立即儲存</button>' : ''}</div>
     ${notesPreview || !canEdit ? `<div class="markdown">${markdown(m.notes) || '<p class="muted">尚無筆記</p>'}</div>`
       : `<textarea id="notes" class="notes" placeholder="# 會議筆記\n\n可以先記下議程、問題或重點，再加入錄音與影片。" aria-label="我的筆記" oninput="editNotes(this.value)" onchange="saveNotes().catch(() => {})">${esc(m.notes)}</textarea>`}
-    <p id="notes-status" class="muted" role="status">${pendingNotes.has(m.id) ? '尚未儲存' : '已儲存'}</p>`;
+    <p id="notes-status" class="muted" role="status">${pendingNotes.has(m.id) ? '尚未儲存' : '已儲存'}</p>
+    ${tab === 'notes' ? meetingImages(m, 'notes', canEdit) : ''}`;
 }
 async function showNew() {
   stop();
@@ -1306,7 +1494,10 @@ function selectReviewPrompt(value) {
   renderReviewIfCurrent(current.id);
 }
 function setReviewField(field, value) {
-  if (current && ['question', 'promptTitle', 'prompt'].includes(field)) reviewState(current.id)[field] = value;
+  if (!current || !['question', 'promptTitle', 'prompt'].includes(field)) return;
+  const state = reviewState(current.id);
+  state[field] = value;
+  if (field === 'question' && state.image && !state.asking) $('#review-submit').textContent = value.trim() ? '提問' : '辨識圖片';
 }
 function reviewSourceLink(source) {
   const title = esc(source?.title || source?.url || '來源');
@@ -1405,7 +1596,10 @@ function reviewPanel(m) {
       </details>
       <p class="muted">只有目前帳號能在此 app 查看對話；對話不隨會議分享。提問會交給目前設定的 AI 模型處理。</p>
       <label for="review-question">你的問題<textarea id="review-question" data-keep maxlength="10000" placeholder="依會議內容提問或追問…" oninput="setReviewField('question', this.value)" ${state.asking || state.clearing ? 'disabled' : ''}>${esc(state.question)}</textarea></label>
-      <div class="review-actions"><button class="primary" data-keep onclick="askReview()" ${!canReview || state.asking || state.loading || state.clearing ? 'disabled title="需要檢視權限"' : ''}>${state.asking ? '檢討中…' : '提問'}</button>
+      ${state.image ? `<div class="meeting-image markdown"><img src="${esc(state.image)}" alt="待送出的圖片">
+        <button ${state.asking || state.clearing ? 'disabled' : ''} onclick="reviewState(current.id).image = null; render(current); $('#insert-image-review').focus()">移除圖片</button></div>` : ''}
+      <div class="review-actions">${canReview ? insertImageButton('review', state.image ? '更換圖片' : '插入圖片', state.asking || state.clearing) : ''}
+        <button id="review-submit" class="primary" data-keep onclick="askReview()" ${!canReview || state.asking || state.loading || state.clearing ? 'disabled title="需要檢視權限"' : ''}>${state.asking ? '檢討中…' : state.image && !state.question.trim() ? '辨識圖片' : '提問'}</button>
         <span class="muted" role="status">${state.asking ? '正在整理回答…' : ''}</span>
         ${state.messages.length ? `<button class="ghost" data-keep onclick="clearReviewHistory()" ${!canReview || state.clearing || state.asking ? 'disabled title="需要檢視權限"' : ''}>${state.clearing ? '清除中…' : '清除我的對話'}</button>` : ''}</div>
     </div>
@@ -1420,9 +1614,10 @@ function reviewPanel(m) {
         <summary><span class="review-turn-title">第 ${index + 1} 回合：${esc(preview.slice(0, 90))}${preview.length > 90 ? '…' : ''}</span>
           <span class="muted">${message.createdAt ? esc(dt(message.createdAt)) : ''}</span></summary>
         <div class="review-turn-body"><details class="group review-question" data-disclosure="${esc(key)}:question" ${state.disclosures[`${key}:question`] ? 'open' : ''} ontoggle="toggleReviewDisclosure(this)">
-          <summary>查看完整問題</summary><div class="markdown">${questionHTML}</div></details>
+          <summary>查看完整問題</summary><div class="markdown">${questionHTML}${attachedImage(message.image)}</div></details>
         <p class="muted">${esc(message.model ?? '')}${message.effort ? ` · ${esc(message.effort)}` : ''}</p>
-        ${stale ? staleWarning : ''}<div class="markdown review-answer">${reviewAnswerMarkdown(message.answer ?? '', !stale)}</div></div></details></article>`;
+        ${stale ? staleWarning : ''}<div class="markdown review-answer">${reviewAnswerMarkdown(message.answer ?? '', !stale)}</div>
+        ${message.id && message.answer?.trim() ? `<button data-keep data-turn="${esc(message.id)}" onclick="createMeetingDiagram(this)">產生會議圖</button>` : ''}</div></details></article>`;
     }).join('') : '<p class="muted">還沒有檢討紀錄。</p>'}</div>
   </section>`;
 }
@@ -1461,7 +1656,7 @@ async function askReview() {
   const id = current.id, userId = me.id, epoch = reviewEpoch, state = reviewState(id);
   if (rank(current.perm) < rank('view') || state.asking) return;
   state.question = $('#review-question')?.value ?? state.question;
-  const draft = state.question, question = draft.trim();
+  const draft = state.question, image = state.image, question = draft.trim() || (image ? '請辨識這張圖片，描述可見內容並轉錄可辨識的文字。' : '');
   if (!question) { state.error = '請輸入問題。'; renderReviewIfCurrent(id); return; }
   const prompt = state.prompt.trim();
   // The API stores one question string, so include the selected prompt in each saved turn.
@@ -1475,7 +1670,7 @@ async function askReview() {
     if (rank(current.perm) >= rank('edit')) await saveNotes();
     if (!sameReviewSession(userId, epoch)) return;
     const generation = state.contextGeneration;
-    const result = await api(`/api/meetings/${encodeURIComponent(id)}/review`, json('POST', { question: submitted }));
+    const result = await api(`/api/meetings/${encodeURIComponent(id)}/review`, json('POST', { question: submitted, ...(image && { image }) }));
     if (!sameReviewSession(userId, epoch)) return;
     if (generation !== state.contextGeneration) {
       invalidateReview(id);
@@ -1487,6 +1682,7 @@ async function askReview() {
     state.loaded = true;
     state.needsRefresh = false;
     if (state.question === draft) state.question = '';
+    if (state.image === image) state.image = null;
   } catch (error) {
     if (sameReviewSession(userId, epoch)) {
       if (error.status === 409) invalidateReview(id);
@@ -1631,8 +1827,8 @@ function render(m) {
   const staleNote = m.summaryStale && !busy ? '<p class="notice">會議內容已變更，摘要與待辦事項尚未更新。</p>' : '';
   const spkOpts = (cur, extra = '') => speakerIds.filter(x => x !== cur).map(x => `<option value="${x}">${esc(spk(m, x))}</option>`).join('') + extra;
   const bodies = {
-    summary: busy && !m.summary ? `<p class="muted">⏳ ${STATUS[m.status][0]}…</p>`
-      : `${staleNote}<div class="summary markdown">${renderSummary(m) || '<p class="muted">尚無摘要</p>'}</div>`,
+    summary: tab === 'summary' ? `${busy && !m.summary ? `<p class="muted">⏳ ${STATUS[m.status][0]}…</p>`
+      : `${staleNote}<div class="summary markdown">${renderSummary(m) || '<p class="muted">尚無摘要</p>'}</div>`}${meetingImages(m, 'summary', canEdit)}` : '',
     notes: notesEditor(m, canEdit),
     review: tab === 'review' ? reviewPanel(m) : '',
     transcript: !m.segments.length ? `<p class="muted">${busy ? `⏳ ${STATUS[m.status][0]}…` : '沒有逐字稿'}</p>` : `
@@ -1727,6 +1923,8 @@ function render(m) {
           .map(([v, t]) => `<option value="${esc(v)}" ${m.outputLang === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
         <span class="spacer"></span>
         <span id="copy-status" class="muted" role="status"></span><button id="copy-current" data-keep data-copy-kind="summary" onclick="copyContent('summary')" ${m.summary?.trim() ? '' : 'disabled'}>複製摘要</button>
+        ${m.summary?.trim() ? '<button data-keep onclick="createMeetingDiagram(this)">產生會議圖</button>' : ''}
+        ${canEdit ? insertImageButton('summary') : ''}
         ${m.summaryBy ? `<details><summary class="muted">產生資訊</summary><span class="muted">${esc(m.summaryBy.agent)} · ${esc(m.summaryBy.model)} · ${esc(m.summaryBy.effort)}</span></details>` : ''}
         <details ${m.instructions ? 'open' : ''}><summary class="muted">自訂指示</summary>
           <textarea id="instr" placeholder="例如：列出所有提到的數字與截止日">${esc(m.instructions)}</textarea></details>
@@ -1990,6 +2188,8 @@ async function route() {
   }
   if (!me) return showLogin();
   const h = location.hash.slice(1);
+  const diagram = $('#diagram-dialog');
+  if (diagram.open && h.split(':')[0] !== diagram.dataset.meeting) diagram.close();
   if (draftId && h.split(':')[0] !== draftId) {
     const id = draftId;
     draftId = null;

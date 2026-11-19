@@ -576,6 +576,13 @@ test('Anthropic SDK streams through custom endpoints with the existing API versi
     assert.equal(seen.body.stream, true);
     assert.equal(seen.body.fallbacks, 'default');
     assert.equal(typeof seen.body.output_config.effort, 'string');
+    const photoMeeting = await (await admin(base, json('POST', { title: 'Anthropic vision fixture', agentId: 'general' }))).json();
+    cfg.agents.find(agent => agent.id === 'general').model = model.id;
+    await admin(`${api}/admin/ai`, json('PUT', cfg));
+    const image = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+xW0cAAAAASUVORK5CYII=';
+    const vision = await admin(`${base}/${photoMeeting.id}/review`, json('POST', { question: '辨識圖片', image }));
+    assert.equal(vision.status, 200);
+    assert.deepEqual(seen.body.messages[0].content[1], { type: 'image', source: { type: 'base64', media_type: 'image/png', data: image } });
     await admin(`${api}/admin/ai/keys`, json('PUT', { modelId: model.id, key: '' }));
     for (const name of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN']) {
       delete process.env.ANTHROPIC_API_KEY;
@@ -961,7 +968,7 @@ test('pending sections transcribe through transcribeClean in order, isolate spea
     for (const [key, value] of Object.entries(savedEnv)) value === undefined ? delete process.env[key] : process.env[key] = value;
   }
 });
-test('private review prompts and per-user meeting threads stay isolated and grounded', async () => {
+test('private review prompts and per-user meeting threads stay isolated and grounded', async t => {
   const member = client(), readonly = client(), anonymous = client();
   await admin(`${api}/admin/settings`, json('PUT', { registration: true }));
   const memberSignup = await member(`${api}/auth/register`, json('POST', { username: 'reviewer', password: 'password1', displayName: 'Questioner' }));
@@ -1223,10 +1230,99 @@ test('private review prompts and per-user meeting threads stay isolated and grou
     assert.deepEqual((await (await admin(route)).json()).messages.map(x => x.question), [adminQuestion], 'clearing affects only the caller’s thread');
     assert.deepEqual((await (await member(customRoute)).json()).custom, custom, 'clearing a thread retains the caller’s custom prompts');
     assert.equal(fs.statSync(reviewFile).mode & 0o777, 0o600, 'reviews.json uses the existing private jsonStore mode');
+
+    await t.test('shared and private Base64 images use vision with their existing permissions', async () => {
+      const target = await (await admin(base, json('POST', { title: '無標題會議' }))).json();
+      const meetingRoute = `${base}/${target.id}`, images = `${meetingRoute}/images`, review = `${meetingRoute}/review`;
+      const data = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+xW0cAAAAASUVORK5CYII=';
+      const imageURL = `data:image/png;base64,${data}`;
+      assert.equal((await anonymous(images, json('POST', { field: 'summary', image: data }))).status, 401);
+      assert.equal((await readonly(images, json('POST', { field: 'summary', image: data }))).status, 403);
+      for (const image of ['data:image/svg+xml;base64,PHN2Zy8+', 'data:image/jpeg;base64,' + data, 'https://example.com/image.png']) {
+        assert.equal((await admin(images, json('POST', { field: 'notes', image }))).status, 400);
+      }
+      assert.equal((await admin(images, json('POST', { field: 'notes', image: 'A'.repeat(960000) }))).status, 413);
+      const added = [];
+      for (const [field, input] of [['summary', data.slice(0, -1)], ['notes', imageURL]]) {
+        const response = await admin(images, json('POST', { field, image: input }));
+        assert.equal(response.status, 201);
+        const { image } = await response.json();
+        assert.deepEqual([image.field, image.mime, image.data], [field, 'image/png', data]);
+        const recognize = `${images}?id=${image.id}`;
+        assert.equal((await readonly(recognize, { method: 'POST' })).status, 403);
+        const result = await admin(recognize, { method: 'POST' });
+        assert.equal(result.status, 200);
+        assert.deepEqual(requests.at(-1).messages[1].content[1], { type: 'image_url', image_url: { url: imageURL } });
+        added.push((await result.json()).image);
+        assert.match(added.at(-1).description, /^PRIVATE_REVIEW_ANSWER_/);
+      }
+      assert.deepEqual((await (await readonly(meetingRoute)).json()).images, added);
+      assert.equal((await (await admin(`${meetingRoute}?ifEmpty=1`, { method: 'DELETE' })).json()).kept, true);
+      for (const image of added) assert.equal((await admin(`${images}?id=${image.id}`, { method: 'DELETE' })).status, 200);
+
+      const privateAnswer = await readonly(review, json('POST', { question: '請辨識圖片', image: imageURL }));
+      assert.equal(privateAnswer.status, 200, 'a picture can be the only source in a draft');
+      assert.deepEqual((await privateAnswer.json()).messages[0].image, { mime: 'image/png', data });
+      assert.deepEqual(requests.at(-1).messages[1].content[1], { type: 'image_url', image_url: { url: imageURL } });
+      assert.deepEqual((await (await admin(review)).json()).messages, [], 'shared meeting owner cannot see the private image');
+      assert.deepEqual((await (await admin(meetingRoute)).json()).images, []);
+      assert.equal((await (await admin(`${meetingRoute}?ifEmpty=1`, { method: 'DELETE' })).json()).kept, true);
+      await admin(meetingRoute, json('PATCH', { access: 'private' }));
+      assert.equal((await readonly(images, json('POST', { field: 'notes', image: data }))).status, 404);
+      assert.equal((await readonly(review, json('POST', { question: '請辨識圖片', image: imageURL }))).status, 404);
+    });
   } finally {
     releaseModel?.();
     globalThis.fetch = originalFetch;
     for (const [key, value] of Object.entries(savedEnv)) value === undefined ? delete process.env[key] : process.env[key] = value;
+  }
+});
+
+test('meeting diagrams export PNG from the summary or the caller’s own review only', async () => {
+  const viewer = client();
+  await admin(`${api}/admin/settings`, json('PUT', { registration: true }));
+  const { user } = await (await viewer(`${api}/auth/register`, json('POST', { username: 'diagram-viewer', password: 'password1' }))).json();
+  const m = await (await admin(base, json('POST', { title: 'Diagram fixture', notes: 'INTERNAL_NOTES' }))).json();
+  const fixture = localMeeting(m.id);
+  saveLocalMeeting(m.id, { ...fixture, summary: 'PUBLIC_DIAGRAM_SUMMARY' });
+  const turnId = '12345678-aaaa-bbbb-cccc-123456789abc';
+  const file = path.join(process.env.DATA_DIR, 'reviews.json'), stored = JSON.parse(fs.readFileSync(file, 'utf8'));
+  stored.users[user.id] = { meetings: { [m.id]: [{ id: turnId, question: 'PRIVATE_PROMPT\n\n【使用者問題】\nDIAGRAM_QUESTION', answer: 'PRIVATE_DIAGRAM_ANSWER' }] } };
+  fs.writeFileSync(file, JSON.stringify(stored));
+  const route = `${base}/${m.id}/diagram`, prevBase = process.env.OPENAI_BASE_URL, originalFetch = globalThis.fetch;
+  const data = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+xW0cAAAAASUVORK5CYII=';
+  const calls = [];
+  let validImage = true;
+  globalThis.fetch = async (url, opts) => {
+    if (String(url).startsWith(`http://127.0.0.1:${server.address().port}/`)) return originalFetch(url, opts);
+    assert.equal(url, 'http://127.0.0.1:3425/v1/images/generations');
+    calls.push(JSON.parse(opts.body));
+    return Response.json({ data: [{ b64_json: validImage ? data : 'UERG' }] });
+  };
+  try {
+    process.env.OPENAI_BASE_URL = 'https://litellm.example/v1';
+    assert.equal((await viewer(route, json('POST', {}))).status, 503);
+    process.env.OPENAI_BASE_URL = 'http://127.0.0.1:3425/v1';
+    assert.equal((await admin(route, json('POST', { turnId }))).status, 404);
+    assert.equal((await client()(route, json('POST', {}))).status, 401);
+    assert.equal(calls.length, 0);
+    for (const [body, expected] of [[{}, /PUBLIC_DIAGRAM_SUMMARY/], [{ turnId }, /DIAGRAM_QUESTION.*PRIVATE_DIAGRAM_ANSWER/]]) {
+      const response = await viewer(route, json('POST', body));
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get('content-type'), 'image/png');
+      assert.equal(response.headers.get('cache-control'), 'no-store');
+      assert.equal(Buffer.from(await response.arrayBuffer()).toString('base64'), data);
+      assert.equal(calls.at(-1).model, 'codex/gpt-image-2.6-flare');
+      assert.match(calls.at(-1).prompt, expected);
+      assert.doesNotMatch(calls.at(-1).prompt, /INTERNAL_NOTES|PRIVATE_PROMPT/);
+    }
+    assert.doesNotMatch(calls[0].prompt, /PRIVATE_DIAGRAM_ANSWER/);
+    validImage = false;
+    assert.equal((await viewer(route, json('POST', {}))).status, 502);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (prevBase === undefined) delete process.env.OPENAI_BASE_URL;
+    else process.env.OPENAI_BASE_URL = prevBase;
   }
 });
 
